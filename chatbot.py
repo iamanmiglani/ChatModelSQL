@@ -9,6 +9,7 @@ from datetime import datetime
 import json
 import logging
 from sqlalchemy import create_engine, text
+import re
 
 
 @dataclass
@@ -131,9 +132,23 @@ class QueryGenerator:
         return sql_query, summary_prompt
 
     def _sanitize_sql_query(self, raw_query: str) -> str:
-        """Sanitize the generated SQL query by removing markdown formatting."""
-        # Remove backticks and strip unnecessary whitespace
-        sanitized_query = raw_query.replace("```sql", "").replace("```", "").strip()
+        """
+        Sanitize the generated SQL query by removing markdown formatting
+        and extracting only valid SQL statements.
+        """
+        # Remove markdown code blocks
+        raw_query = raw_query.replace("```sql", "").replace("```", "").strip()
+
+        # Use regex to find the first SQL-like statement
+        sql_pattern = re.compile(r"(SELECT|INSERT|UPDATE|DELETE|WITH)\s+", re.IGNORECASE)
+        match = sql_pattern.search(raw_query)
+
+        if match:
+            # Extract from the start of the match to the end of the string
+            sanitized_query = raw_query[match.start():].strip()
+        else:
+            raise ValueError("No valid SQL query found in the response.")
+
         return sanitized_query
 
     def _create_context(self) -> str:
