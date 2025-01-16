@@ -45,7 +45,7 @@ class ChartCodeGenerator:
             return self._split_code_into_charts(code)
             
         except Exception as e:
-            self.logger.error(f"Error in OpenAI API call: {e}")
+            self.logger.error(f"Error in OpenAI API call: {e}", exc_info=True)
             return {}
 
     def _split_code_into_charts(self, code: str) -> dict:
