@@ -34,7 +34,7 @@ class ChartCodeGenerator:
         """
         try:
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model="gpt-3.5-turbo",  # The model can remain the same, or you can update it if needed
                 messages=[
                     {"role": "system", "content": "You are an expert Python data visualization assistant."},
                     {"role": "user", "content": prompt},
@@ -42,6 +42,7 @@ class ChartCodeGenerator:
                 temperature=0.5
             )
 
+            # Extract the code from the response
             code = response['choices'][0]['message']['content']
             self.logger.info("OpenAI Response: %s", code)
             return self._split_code_into_charts(code)
@@ -56,6 +57,7 @@ class ChartCodeGenerator:
         current_chart = None
         chart_lines = []
 
+        # Split the code into blocks for each chart type
         for line in code.splitlines():
             if line.startswith("#") and "chart" in line.lower():
                 if current_chart:
