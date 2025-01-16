@@ -1,49 +1,38 @@
 import openai
 import pandas as pd
-from typing import List, Dict, Any
+import logging
 
 
 class ChartCodeGenerator:
     """Generates Python code for visualizing data using Plotly."""
-    
-    def __init__(self, api_key: str):
-        self.openai_client = openai.Client(api_key=api_key)
 
-    def generate_chart_code(self, df: pd.DataFrame) -> Dict[str, str]:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        openai.api_key = api_key
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger(__name__)
+
+    def generate_chart_code(self, df: pd.DataFrame) -> dict:
         """
         Generate Python code for all possible chart types based on the given DataFrame.
         Returns a dictionary with chart types as keys and corresponding Python code as values.
         """
-        # Convert DataFrame metadata to a JSON-like structure
         columns = df.columns.tolist()
-        metadata = {
-            "columns": columns,
-            "sample_data": df.head(5).to_dict(orient="records"),
-        }
-
-        # Prepare the prompt for the OpenAI API
         prompt = f"""
-        You are a Python data visualization expert. Using Plotly, generate Python code for all possible chart types
-        that can be created using the following DataFrame metadata:
-        
-        Metadata:
-        {metadata}
+        You are a Python data visualization expert. Generate Python code for visualizing data using Plotly.
+        Use the following DataFrame columns:
+        {columns}
 
-        Generate code for the following chart types:
-        - Bar chart
-        - Line chart
-        - Scatter plot
-        - Pie chart
-        - Histogram
+        Generate Python code for:
+        1. Bar chart
+        2. Line chart
+        3. Scatter plot
+        4. Pie chart
+        5. Histogram
 
-        For each chart, ensure that:
-        - The user can customize the x-axis, y-axis, and color.
-        - Use sample data from the metadata to demonstrate the charts.
-
-        Provide a separate Python code block for each chart type.
+        Use the column names dynamically for axes. Include Plotly imports in the code.
         """
-        
-        response = self.openai_client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are an expert Python data visualization assistant."},
@@ -52,16 +41,15 @@ class ChartCodeGenerator:
             temperature=0.5
         )
 
-        # Process the response
-        chart_code = response.choices[0].message.content
+        # Log the response for debugging
+        self.logger.info("OpenAI Response: %s", response.choices[0].message.content)
 
-        # Split the code into separate chart types
-        chart_blocks = self._split_chart_code(chart_code)
-        return chart_blocks
+        code = response.choices[0].message.content
+        return self._split_code_into_charts(code)
 
-    def _split_chart_code(self, code: str) -> Dict[str, str]:
+    def _split_code_into_charts(self, code: str) -> dict:
         """
-        Split the generated code into separate blocks for each chart type.
+        Splits a single block of code into multiple chart-specific code snippets.
         """
         chart_blocks = {}
         current_chart = None
