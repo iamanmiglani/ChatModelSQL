@@ -32,20 +32,25 @@ class ChartCodeGenerator:
 
         Use the column names dynamically for axes. Include Plotly imports in the code.
         """
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are an expert Python data visualization assistant."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.5
-        )
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are an expert Python data visualization assistant."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.5
+            )
 
-        # Log the response for debugging
-        self.logger.info("OpenAI Response: %s", response.choices[0].message.content)
+            # Log the response for debugging
+            self.logger.info("OpenAI Response: %s", response['choices'][0]['message']['content'])
 
-        code = response.choices[0].message.content
-        return self._split_code_into_charts(code)
+            code = response['choices'][0]['message']['content']
+            return self._split_code_into_charts(code)
+
+        except Exception as e:
+            self.logger.error(f"Error in OpenAI API call: {e}")
+            return {}
 
     def _split_code_into_charts(self, code: str) -> dict:
         """
