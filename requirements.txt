@@ -2,7 +2,7 @@ streamlit
 pandas
 duckdb
 plotly==5.17.0
-python-dotenv==1.0.0
+python-dotenv
 openai
 sqlalchemy
 openpyxl
