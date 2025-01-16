@@ -117,7 +117,7 @@ class QueryGenerator:
         ]
 
         response = self.openai_client.chat.completions.create(
-            model="gpt-4-turbo-preview",
+            model="gpt-3.5-turbo",
             messages=messages,
             temperature=0
         )
@@ -185,7 +185,7 @@ class ChatBot:
             ]
 
             summary_response = self.query_generator.openai_client.chat.completions.create(
-                model="gpt-4-turbo-preview",
+                model="gpt-3.5-turbo",
                 messages=summary_messages,
                 temperature=0.7
             )
