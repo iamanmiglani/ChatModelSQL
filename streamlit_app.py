@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, inspect
 import tempfile
 import os
 import plotly.express as px
-from chats import ChartCodeGenerator  # Assuming chats.py contains ChartCodeGenerator
+from charts import ChartCodeGenerator  # Assuming chats.py contains ChartCodeGenerator
 
 class StreamlitChatBot:
     def __init__(self):
