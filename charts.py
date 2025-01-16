@@ -33,17 +33,16 @@ class ChartCodeGenerator:
         Use the column names dynamically for axes. Include Plotly imports in the code.
         """
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",  # The model can remain the same, or you can update it if needed
-                messages=[
-                    {"role": "system", "content": "You are an expert Python data visualization assistant."},
-                    {"role": "user", "content": prompt},
-                ],
+            # Updated method to use completions API
+            response = openai.completions.create(
+                model="gpt-3.5-turbo",  # Ensure this model is supported
+                prompt=prompt,
+                max_tokens=500,  # You can adjust the max_tokens value as needed
                 temperature=0.5
             )
 
             # Extract the code from the response
-            code = response['choices'][0]['message']['content']
+            code = response['choices'][0]['text']
             self.logger.info("OpenAI Response: %s", code)
             return self._split_code_into_charts(code)
 
