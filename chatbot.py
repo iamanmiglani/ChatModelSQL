@@ -1,6 +1,5 @@
 import os
 import pandas as pd
-import sqlite3
 import duckdb
 import numpy as np
 from typing import List, Dict, Any, Tuple
@@ -10,30 +9,22 @@ from datetime import datetime
 import json
 import logging
 from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
-
-# Retrieve the OpenAI API key from the environment variables
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise ValueError("OpenAI API key not found. Please ensure it is set in the .env file.")
 
 @dataclass
 class DataFrameMetadata:
-    """Stores metadata about each DataFrame for better context handling"""
+    """Stores metadata about each DataFrame for better context handling."""
     name: str
     columns: List[str]
     sample_values: Dict[str, List[Any]]
     cardinality: Dict[str, int]
     total_rows: int
     description: str = ""
-    source_type: str = ""  # Added to track data source type
+    source_type: str = ""
     last_updated: datetime = datetime.now()
 
+
 class DataFrameManager:
-    """Manages multiple DataFrames using both DuckDB and SQLite"""
+    """Manages multiple DataFrames using both DuckDB and SQLite."""
 
     def __init__(self, sql_db_path: str = "app_data.db"):
         self.duckdb_conn = duckdb.connect(database=':memory:', read_only=False)
@@ -50,9 +41,8 @@ class DataFrameManager:
         self.logger = logging.getLogger(__name__)
 
     def load_existing_tables(self):
-        """Load existing tables from SQLite database into DuckDB"""
+        """Load existing tables from SQLite database into DuckDB."""
         try:
-            # Get list of tables from SQLite
             with self.sql_engine.connect() as conn:
                 tables = pd.read_sql(
                     text("SELECT name FROM sqlite_master WHERE type='table'"),
@@ -63,127 +53,57 @@ class DataFrameManager:
                     self.logger.info("No tables found in the SQLite database.")
                     return
 
-                # Skip metadata tables
-                tables = tables[~tables['name'].isin(['table_metadata', 'column_metadata'])]
-
                 for table_name in tables['name']:
-                    # Load table from SQLite
                     df = pd.read_sql_table(table_name, conn)
-
-                    # Get metadata from metadata tables
-                    metadata = pd.read_sql(
-                        text("SELECT * FROM table_metadata WHERE table_name = :table_name"),
-                        conn,
-                        params={"table_name": table_name}
-                    ).iloc[0]
-
-                    column_metadata = pd.read_sql(
-                        text("SELECT * FROM column_metadata WHERE table_name = :table_name"),
-                        conn,
-                        params={"table_name": table_name}
-                    )
-
-                    # Register with DuckDB
                     self.duckdb_conn.register(table_name, df)
 
-                    # Reconstruct metadata
                     self.metadata[table_name] = DataFrameMetadata(
                         name=table_name,
                         columns=df.columns.tolist(),
-                        sample_values={row['column_name']: json.loads(row['sample_values'])
-                                       for _, row in column_metadata.iterrows()},
-                        cardinality={row['column_name']: row['cardinality']
-                                     for _, row in column_metadata.iterrows()},
-                        total_rows=len(df),
-                        description=metadata['description'],
-                        source_type=metadata['file_type'],
-                        last_updated=metadata['upload_date']
+                        sample_values={col: df[col].dropna().sample(min(5, len(df))).tolist()
+                                       for col in df.columns},
+                        cardinality={col: df[col].nunique() for col in df.columns},
+                        total_rows=len(df)
                     )
-
                     self.logger.info(f"Loaded existing table '{table_name}' from SQLite")
 
         except Exception as e:
             self.logger.error(f"Error loading existing tables: {str(e)}")
 
     def add_dataframe(self, name: str, df: pd.DataFrame, description: str = "", source_type: str = "") -> None:
-        """Add a DataFrame to both DuckDB and SQLite with metadata"""
+        """Add a DataFrame to both DuckDB and SQLite with metadata."""
         try:
-            # Clean table name
             name = "".join(c if c.isalnum() else "_" for c in name)
-
-            # Save to SQLite
             df.to_sql(name, self.sql_engine, if_exists='replace', index=False)
-
-            # Register with DuckDB
             self.duckdb_conn.register(name, df)
 
-            # Calculate metadata
-            cardinality = {col: df[col].nunique() for col in df.columns}
-            sample_values = {
-                col: df[col].dropna().sample(min(5, len(df))).tolist()
-                for col in df.columns
-            }
-
-            # Store metadata
-            metadata = DataFrameMetadata(
+            self.metadata[name] = DataFrameMetadata(
                 name=name,
                 columns=df.columns.tolist(),
-                sample_values=sample_values,
-                cardinality=cardinality,
+                sample_values={col: df[col].dropna().sample(min(5, len(df))).tolist()
+                               for col in df.columns},
+                cardinality={col: df[col].nunique() for col in df.columns},
                 total_rows=len(df),
                 description=description,
                 source_type=source_type,
                 last_updated=datetime.now()
             )
-            self.metadata[name] = metadata
-
-            # Save metadata to SQLite
-            with self.sql_engine.connect() as conn:
-                # Table metadata
-                conn.execute(text("""
-                    INSERT OR REPLACE INTO table_metadata 
-                    (table_name, description, upload_date, file_type, row_count, column_count)
-                    VALUES (:table_name, :description, :upload_date, :file_type, :row_count, :column_count)
-                """), {
-                    "table_name": name,
-                    "description": description,
-                    "upload_date": metadata.last_updated,
-                    "file_type": source_type,
-                    "row_count": metadata.total_rows,
-                    "column_count": len(metadata.columns)
-                })
-
-                # Column metadata
-                for col in df.columns:
-                    conn.execute(text("""
-                        INSERT OR REPLACE INTO column_metadata 
-                        (table_name, column_name, data_type, cardinality, sample_values)
-                        VALUES (:table_name, :column_name, :data_type, :cardinality, :sample_values)
-                    """), {
-                        "table_name": name,
-                        "column_name": col,
-                        "data_type": str(df[col].dtype),
-                        "cardinality": cardinality[col],
-                        "sample_values": json.dumps(sample_values[col])
-                    })
-
-                conn.commit()
-
-            self.logger.info(f"Successfully added DataFrame '{name}' with {len(df)} rows")
+            self.logger.info(f"Successfully added DataFrame '{name}'")
 
         except Exception as e:
             self.logger.error(f"Error adding DataFrame '{name}': {str(e)}")
             raise
 
-class QueryGenerator:
-    """Generates SQL queries based on natural language input"""
 
-    def __init__(self, df_manager: DataFrameManager):
+class QueryGenerator:
+    """Generates SQL queries based on natural language input."""
+
+    def __init__(self, df_manager: DataFrameManager, api_key: str):
         self.df_manager = df_manager
-        self.openai_client = openai.Client(api_key=OPENAI_API_KEY)
+        self.openai_client = openai.Client(api_key=api_key)
 
     def generate_query(self, user_question: str) -> Tuple[str, str]:
-        """Generate SQL query and summary prompt from user question"""
+        """Generate SQL query and summary prompt from user question."""
         context = self._create_context()
 
         messages = [
@@ -206,43 +126,33 @@ class QueryGenerator:
         return sql_query, summary_prompt
 
     def _create_context(self) -> str:
-        """Create enhanced context string from DataFrame metadata"""
+        """Create enhanced context string from DataFrame metadata."""
         context = []
         for name, meta in self.df_manager.metadata.items():
             table_info = [
                 f"Table: {name}",
-                f"Description: {meta.description}",
-                f"Source Type: {meta.source_type}",
-                f"Last Updated: {meta.last_updated}",
                 f"Total Rows: {meta.total_rows}",
                 "Columns:"
             ]
-
             for col in meta.columns:
-                samples = meta.sample_values[col]
-                cardinality = meta.cardinality[col]
-                table_info.append(f"  - {col} (unique values: {cardinality}, samples: {samples})")
-
+                table_info.append(f"  - {col}")
             context.append("\n".join(table_info))
-
         return "\n\n".join(context)
 
+
 class ChatBot:
-    """Main chatbot class that handles user interactions"""
+    """Main chatbot class that handles user interactions."""
 
     def __init__(self, df_manager: DataFrameManager, query_generator: QueryGenerator):
         self.df_manager = df_manager
         self.query_generator = query_generator
 
     def process_question(self, question: str) -> Dict[str, Any]:
-        """Process user question and return results with summary"""
+        """Process user question and return results with summary."""
         try:
             sql_query, summary_prompt = self.query_generator.generate_query(question)
-
-            # Execute query using DuckDB for performance
             result_df = self.df_manager.duckdb_conn.execute(sql_query).fetchdf()
 
-            # Generate summary
             summary_messages = [
                 {"role": "system", "content": "You are a data analyst. Provide a concise summary of the data."},
                 {"role": "user", "content": summary_prompt.replace("[QUERY_RESULT]", result_df.to_string())}
@@ -263,14 +173,11 @@ class ChatBot:
 
         except Exception as e:
             logging.error(f"Error processing question: {str(e)}")
-            return {
-                "error": str(e),
-                "timestamp": datetime.now().isoformat()
-            }
+            return {"error": str(e)}
 
-# Helper function to setup chatbot
-def setup_chatbot(sql_db_path: str = "app_data.db") -> ChatBot:
-    """Setup and initialize the chatbot with database connection"""
-    df_manager = DataFrameManager(sql_db_path)
-    query_generator = QueryGenerator(df_manager)
+
+def setup_chatbot(api_key: str) -> ChatBot:
+    """Setup and initialize the chatbot with the provided API key."""
+    df_manager = DataFrameManager()
+    query_generator = QueryGenerator(df_manager, api_key)
     return ChatBot(df_manager, query_generator)
