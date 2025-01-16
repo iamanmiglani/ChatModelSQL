@@ -3,7 +3,7 @@ pandas
 duckdb
 plotly==5.17.0
 python-dotenv
-openai
+openai == 0.28
 sqlalchemy
 openpyxl
 xlrd
