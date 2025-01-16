@@ -1,11 +1,12 @@
-# Import libraries 
-
+# Import libraries
 import streamlit as st
 import pandas as pd
 from chatbot import setup_chatbot
 from sqlalchemy import create_engine, inspect
 import tempfile
 import os
+import plotly.express as px
+from chats import ChartCodeGenerator  # Assuming chats.py contains ChartCodeGenerator
 
 class StreamlitChatBot:
     def __init__(self):
@@ -15,10 +16,14 @@ class StreamlitChatBot:
             st.session_state.chatbot = None
         if 'uploaded_tables' not in st.session_state:
             st.session_state.uploaded_tables = []
+        if 'query_results' not in st.session_state:
+            st.session_state.query_results = None
+        if 'show_visualization' not in st.session_state:
+            st.session_state.show_visualization = False
 
     def setup_page(self):
-        st.set_page_config(page_title="AI Chatbot with Data Upload", layout="wide")
-        st.title("AI Chatbot with Data Management")
+        st.set_page_config(page_title="AI Chatbot with Data Upload and Visualization", layout="wide")
+        st.title("AI Chatbot with Data Management and Visualization")
 
     def render_sidebar(self):
         with st.sidebar:
@@ -110,9 +115,49 @@ class StreamlitChatBot:
                 st.write("### Query:")
                 st.code(response["query"])
                 st.write("### Results:")
-                st.dataframe(pd.DataFrame(response["data"]))
+                result_df = pd.DataFrame(response["data"])
+                st.dataframe(result_df)
                 st.write("### Summary:")
                 st.info(response["summary"])
+                
+                # Store the query results for visualization
+                st.session_state.query_results = result_df
+
+                # Add a Visualize button
+                if st.button("Visualize"):
+                    st.session_state.show_visualization = True
+
+        # Visualization Section
+        if st.session_state.show_visualization and st.session_state.query_results is not None:
+            self.render_visualization_tab(st.session_state.query_results)
+
+    def render_visualization_tab(self, df: pd.DataFrame):
+        st.header("Visualize Your Data")
+
+        # Chart customization options
+        chart_type = st.selectbox("Select Chart Type", ["Bar Chart", "Line Chart", "Scatter Plot", "Pie Chart", "Histogram"])
+        x_axis = st.selectbox("Select X-Axis", df.columns)
+        y_axis = st.selectbox("Select Y-Axis", df.columns if chart_type != "Pie Chart" else [""])
+        color = st.color_picker("Pick a Color", "#636EFA")
+
+        # Generate chart
+        if st.button("Generate Chart"):
+            chart_generator = ChartCodeGenerator(api_key=st.session_state.openai_api_key)
+            chart_codes = chart_generator.generate_chart_code(df)
+            code = chart_codes.get(chart_type, "")
+
+            try:
+                # Execute and display the generated chart
+                exec_globals = {}
+                exec(code, {"pd": pd, "px": px}, exec_globals)
+                fig = exec_globals.get("fig", None)
+                if fig:
+                    fig.update_traces(marker=dict(color=color))  # Apply custom color
+                    st.plotly_chart(fig)
+                else:
+                    st.error("Could not generate the chart.")
+            except Exception as e:
+                st.error(f"Error generating chart: {e}")
 
 
 def main():
