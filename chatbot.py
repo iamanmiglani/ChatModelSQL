@@ -59,6 +59,10 @@ class DataFrameManager:
                     conn
                 )
 
+                if tables.empty:
+                    self.logger.info("No tables found in the SQLite database.")
+                    return
+
                 # Skip metadata tables
                 tables = tables[~tables['name'].isin(['table_metadata', 'column_metadata'])]
 
