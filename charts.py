@@ -33,7 +33,6 @@ class ChartCodeGenerator:
         Use the column names dynamically for axes. Include Plotly imports in the code.
         """
         try:
-            # Call the OpenAI API
             response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
@@ -43,10 +42,8 @@ class ChartCodeGenerator:
                 temperature=0.5
             )
 
-            # Extract content from the response
             code = response['choices'][0]['message']['content']
             self.logger.info("OpenAI Response: %s", code)
-
             return self._split_code_into_charts(code)
 
         except Exception as e:
@@ -54,9 +51,7 @@ class ChartCodeGenerator:
             return {}
 
     def _split_code_into_charts(self, code: str) -> dict:
-        """
-        Splits a single block of code into multiple chart-specific code snippets.
-        """
+        """Splits a single block of code into multiple chart-specific code snippets."""
         chart_blocks = {}
         current_chart = None
         chart_lines = []
