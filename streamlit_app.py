@@ -131,34 +131,48 @@ class StreamlitChatBot:
         if st.session_state.show_visualization and st.session_state.query_results is not None:
             self.render_visualization_tab(st.session_state.query_results)
 
+    
+    
     def render_visualization_tab(self, df: pd.DataFrame):
         st.header("Visualize Your Data")
 
+        # Initialize chart generator
+        chart_generator = ChartCodeGenerator(api_key=st.session_state.openai_api_key)
+    
         # Chart customization options
-        chart_type = st.selectbox("Select Chart Type", ["Bar Chart", "Line Chart", "Scatter Plot", "Pie Chart", "Histogram"])
+        chart_type = st.selectbox("Select Chart Type", list(chart_generator.chart_templates.keys()))
+        
+        # Get numeric columns for y-axis
+        numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+        
+        # Select columns based on chart type
         x_axis = st.selectbox("Select X-Axis", df.columns)
-        y_axis = st.selectbox("Select Y-Axis", df.columns if chart_type != "Pie Chart" else [""])
+        
+        if chart_type != "Pie Chart" and chart_type != "Histogram":
+            y_axis = st.selectbox("Select Y-Axis", numeric_cols)
+        else:
+            y_axis = None if chart_type == "Histogram" else x_axis
+    
         color = st.color_picker("Pick a Color", "#636EFA")
-
+    
         # Generate chart
         if st.button("Generate Chart"):
-            chart_generator = ChartCodeGenerator(api_key=st.session_state.openai_api_key)
-            chart_codes = chart_generator.generate_chart_code(df)
-            code = chart_codes.get(chart_type, "")
-
             try:
-                # Execute and display the generated chart
-                exec_globals = {}
-                exec(code, {"pd": pd, "px": px}, exec_globals)
-                fig = exec_globals.get("fig", None)
-                if fig:
-                    fig.update_traces(marker=dict(color=color))  # Apply custom color
-                    st.plotly_chart(fig)
-                else:
-                    st.error("Could not generate the chart.")
+                fig = chart_generator.generate_chart(
+                    df=df,
+                    chart_type=chart_type,
+                    x_column=x_axis,
+                    y_column=y_axis,
+                    color=color
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Add chart suggestion
+                suggestion = chart_generator.suggest_chart_type(df, x_axis, y_axis)
+                st.info(f"💡 Suggested visualization: {suggestion}")
+                
             except Exception as e:
-                st.error(f"Error generating chart: {e}")
-
+                st.error(f"Error generating chart: {str(e)}")
 
 def main():
     app = StreamlitChatBot()
