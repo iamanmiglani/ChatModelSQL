@@ -10,6 +10,7 @@ import json
 import logging
 from sqlalchemy import create_engine, text
 
+
 @dataclass
 class DataFrameMetadata:
     """Stores metadata about each DataFrame for better context handling."""
@@ -120,10 +121,20 @@ class QueryGenerator:
             temperature=0
         )
 
-        sql_query = response.choices[0].message.content
+        # Extract the SQL query from the response and clean it
+        raw_sql_query = response.choices[0].message.content
+        sql_query = self._sanitize_sql_query(raw_sql_query)
+
+        # Prepare a summary prompt
         summary_prompt = f"Summarize the following data in a concise, business-friendly way: [QUERY_RESULT]"
 
         return sql_query, summary_prompt
+
+    def _sanitize_sql_query(self, raw_query: str) -> str:
+        """Sanitize the generated SQL query by removing markdown formatting."""
+        # Remove backticks and strip unnecessary whitespace
+        sanitized_query = raw_query.replace("```sql", "").replace("```", "").strip()
+        return sanitized_query
 
     def _create_context(self) -> str:
         """Create enhanced context string from DataFrame metadata."""
