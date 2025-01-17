@@ -96,7 +96,8 @@ class StreamlitChatBot:
                         description=f"Uploaded file: {uploaded_file.name}"
                     )
                     st.success(f"Table '{table_name}' added successfully!")
-                    st.session_state.uploaded_tables.append(table_name)
+                    st.session_state.refresh_needed = True
+                    st.experimental_rerun()
                 else:
                     st.warning("Please set the OpenAI API key first.")
             except Exception as e:
@@ -207,4 +208,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
