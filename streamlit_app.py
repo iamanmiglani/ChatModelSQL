@@ -46,7 +46,7 @@ class StreamlitChatBot:
                 tables = list(st.session_state.df_manager.metadata.keys())
                 if tables:
                     st.subheader("Available Tables")
-                    refresh_needed = False  # Flag to determine if rerun is needed
+                    refresh_triggered = False
                     for table_name in tables:
                         col1, col2 = st.columns([4, 1])
                         with col1:
@@ -54,22 +54,22 @@ class StreamlitChatBot:
                         with col2:
                             if st.button("❌", key=f"delete_{table_name}"):
                                 st.session_state.df_manager.delete_table(table_name)
-                                st.session_state.uploaded_tables = [t for t in tables if t != table_name]
-                                refresh_needed = True
+                                st.success(f"Table '{table_name}' deleted successfully!")
+                                refresh_triggered = True
 
-                    # Trigger a refresh after the loop if needed
-                    if refresh_needed:
+                    # Set a refresh flag in session state
+                    if refresh_triggered:
                         st.session_state.refresh_needed = True
+
+            # Perform refresh after the sidebar rendering if needed
+            if st.session_state.get("refresh_needed", False):
+                st.session_state.refresh_needed = False
+                st.experimental_rerun()
 
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
             if uploaded_file:
                 self.handle_file_upload(uploaded_file)
-
-        # Perform refresh outside the sidebar loop
-        if st.session_state.get("refresh_needed"):
-            st.session_state.refresh_needed = False
-            st.experimental_rerun()
 
     def handle_file_upload(self, uploaded_file):
         """Handle file uploads and add tables to the DataFrameManager."""
@@ -207,3 +207,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
