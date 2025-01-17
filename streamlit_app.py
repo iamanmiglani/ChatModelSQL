@@ -47,7 +47,7 @@ class StreamlitChatBot:
                 tables = list(st.session_state.df_manager.metadata.keys())
                 if tables:
                     st.subheader("Available Tables")
-                    st.caption("Click the ❌ button to delete a table.")
+                    st.caption("Double Click ❌ to delete a table.")
                     for table_name in tables:
                         col1, col2 = st.columns([4, 1])
                         with col1:
