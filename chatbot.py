@@ -114,6 +114,7 @@ class QueryGenerator:
         1. For simple queries on a single table, use straightforward SELECT statements
         2. When joining tables:
            - Use explicit join types (LEFT JOIN, RIGHT JOIN, FULL JOIN) as required
+           - Identify primary and foreign key relationships automatically
            - Match columns that appear to be related (e.g., id fields, matching names)
            - Use clear ON conditions
         3. Include WHERE, GROUP BY, or HAVING clauses as needed
@@ -175,6 +176,10 @@ class QueryGenerator:
 
             context_parts.append("\n".join(filter(None, table_info)))
 
+        relationships = self._infer_table_relationships()
+        if relationships:
+            context_parts.append("\nRelationships:\n" + "\n".join(relationships))
+
         return "\n\n".join(context_parts)
 
     def _infer_column_type(self, values: List[Any]) -> str:
@@ -189,6 +194,23 @@ class QueryGenerator:
         elif isinstance(sample, (datetime, np.datetime64)):
             return "datetime"
         return "text"
+
+    def _infer_table_relationships(self) -> List[str]:
+        """Infer potential primary-foreign key relationships between tables."""
+        relationships = []
+        tables = list(self.df_manager.metadata.values())
+
+        for i, table_a in enumerate(tables):
+            for j, table_b in enumerate(tables):
+                if i >= j:
+                    continue
+
+                for col_a in table_a.columns:
+                    for col_b in table_b.columns:
+                        if col_a == col_b or col_a.lower() == col_b.lower():
+                            relationships.append(f"Potential relationship: {table_a.name}.{col_a} -> {table_b.name}.{col_b}")
+
+        return relationships
 
     def _validate_query(self, query: str) -> bool:
         """Validate the generated query structure."""
@@ -222,4 +244,3 @@ class QueryGenerator:
 
         query = clean_query[match.start():].strip()
         return re.split(r';\s*--|\s*--|\s*;', query)[0].strip()
-
