@@ -1,12 +1,11 @@
-# Import libraries
+from chatbot import DataFrameManager, QueryGenerator
 import streamlit as st
 import pandas as pd
-from chatbot import DataFrameManager, QueryGenerator
-from sqlalchemy import create_engine, inspect
-import tempfile
-import os
 import plotly.express as px
-from charts import ChartCodeGenerator  # Assuming charts.py contains ChartCodeGenerator
+import tempfile
+from sqlalchemy import create_engine, inspect
+from charts import ChartCodeGenerator
+
 
 class StreamlitChatBot:
     def __init__(self):
@@ -30,7 +29,7 @@ class StreamlitChatBot:
     def render_sidebar(self):
         with st.sidebar:
             st.header("Settings")
-
+            
             # Input OpenAI API key
             st.session_state.openai_api_key = st.text_input("Enter OpenAI API Key", type="password")
             if st.session_state.openai_api_key and st.session_state.df_manager is None:
@@ -41,7 +40,7 @@ class StreamlitChatBot:
                 st.success("API Key Set and Chatbot Initialized!")
 
             st.header("Data Management")
-
+            
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
             if uploaded_file:
