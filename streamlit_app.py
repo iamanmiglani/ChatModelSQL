@@ -56,7 +56,12 @@ class StreamlitChatBot:
                                 st.session_state.df_manager.delete_table(table_name)
                                 st.success(f"Table '{table_name}' deleted successfully!")
                                 st.session_state.uploaded_tables.remove(table_name)
-                                st.query_params(refresh="true")
+                                st.session_state.refresh_needed = True
+
+            # Refresh the app after modifications
+            if st.session_state.get("refresh_needed", False):
+                st.session_state.refresh_needed = False
+                st.experimental_rerun()
 
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
@@ -90,7 +95,7 @@ class StreamlitChatBot:
                     st.success(f"Table '{table_name}' added successfully!")
                     if table_name not in st.session_state.uploaded_tables:
                         st.session_state.uploaded_tables.append(table_name)
-                    st.query_params(refresh="true")
+                    st.session_state.refresh_needed = True
                 else:
                     st.warning("Please set the OpenAI API key first.")
             except Exception as e:
