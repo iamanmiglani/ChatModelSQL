@@ -4,7 +4,7 @@ import duckdb
 import numpy as np
 from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
-import openai
+from openai import OpenAI  # Updated import
 from datetime import datetime
 import json
 import logging
@@ -95,21 +95,14 @@ class DataFrameManager:
             self.logger.error(f"Error adding DataFrame '{name}': {str(e)}")
             raise
 
-    def get_table_info(self) -> Dict[str, Dict[str, Any]]:
-        """Get information about all registered tables."""
-        return {name: {
-            "columns": meta.columns,
-            "rows": meta.total_rows,
-            "description": meta.description
-        } for name, meta in self.metadata.items()}
-
 
 class QueryGenerator:
     """Generates SQL queries based on natural language input with enhanced join support."""
 
     def __init__(self, df_manager: DataFrameManager, api_key: str):
         self.df_manager = df_manager
-        self.openai_client = openai.Client(api_key=api_key)
+        # Updated OpenAI client initialization
+        self.openai_client = OpenAI(api_key=api_key)
 
     def generate_query(self, user_question: str) -> Tuple[str, str]:
         """Generate SQL query and summary prompt from user question."""
@@ -281,6 +274,18 @@ class ChatBot:
 
 def setup_chatbot(api_key: str) -> ChatBot:
     """Initialize and configure the chatbot."""
-    df_manager = DataFrameManager()
-    query_generator = QueryGenerator(df_manager, api_key)
-    return ChatBot(df_manager, query_generator)
+    try:
+        # Validate API key by creating a test client
+        test_client = OpenAI(api_key=api_key)
+        # Test the API key with a minimal request
+        test_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "test"}],
+            max_tokens=5
+        )
+        
+        df_manager = DataFrameManager()
+        query_generator = QueryGenerator(df_manager, api_key)
+        return ChatBot(df_manager, query_generator)
+    except Exception as e:
+        raise ValueError(f"Failed to initialize chatbot with provided API key: {str(e)}")
