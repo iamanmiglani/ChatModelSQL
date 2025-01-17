@@ -56,7 +56,7 @@ class StreamlitChatBot:
                                 st.session_state.df_manager.delete_table(table_name)
                                 st.success(f"Table '{table_name}' deleted successfully!")
                                 st.session_state.uploaded_tables.remove(table_name)
-                                st.experimental_set_query_params(refresh="true")
+                                st.query_params(refresh="true")
 
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
