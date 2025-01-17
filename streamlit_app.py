@@ -90,7 +90,7 @@ class StreamlitChatBot:
                     st.success(f"Table '{table_name}' added successfully!")
                     if table_name not in st.session_state.uploaded_tables:
                         st.session_state.uploaded_tables.append(table_name)
-                    st.experimental_set_query_params(refresh="true")
+                    st.query_params(refresh="true")
                 else:
                     st.warning("Please set the OpenAI API key first.")
             except Exception as e:
