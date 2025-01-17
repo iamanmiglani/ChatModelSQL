@@ -59,12 +59,7 @@ class StreamlitChatBot:
 
                     # Set a refresh flag in session state
                     if refresh_triggered:
-                        st.session_state.refresh_needed = True
-
-            # Perform refresh after the sidebar rendering if needed
-            if st.session_state.get("refresh_needed", False):
-                st.session_state.refresh_needed = False
-                st.experimental_rerun()
+                        st.experimental_set_query_params(refresh="true")
 
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
@@ -96,8 +91,7 @@ class StreamlitChatBot:
                         description=f"Uploaded file: {uploaded_file.name}"
                     )
                     st.success(f"Table '{table_name}' added successfully!")
-                    st.session_state.refresh_needed = True
-                    st.experimental_rerun()
+                    st.experimental_set_query_params(refresh="true")
                 else:
                     st.warning("Please set the OpenAI API key first.")
             except Exception as e:
@@ -208,4 +202,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
