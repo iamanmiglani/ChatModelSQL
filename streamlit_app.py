@@ -51,7 +51,7 @@ class StreamlitChatBot:
                         with col1:
                             st.write(f"📊 {table_name}")
                         with col2:
-                            if st.button("Delete", key=f"delete_{table_name}"):
+                            if st.button("❌", key=f"delete_{table_name}"):
                                 st.session_state.df_manager.delete_table(table_name)
                                 st.success(f"Table '{table_name}' deleted successfully!")
                                 st.experimental_rerun()
