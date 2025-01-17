@@ -1,7 +1,7 @@
 # Import libraries
 import streamlit as st
 import pandas as pd
-from chatbot import setup_chatbot
+from chatbot import DataFrameManager, QueryGenerator
 from sqlalchemy import create_engine, inspect
 import tempfile
 import os
@@ -12,8 +12,10 @@ class StreamlitChatBot:
     def __init__(self):
         if 'openai_api_key' not in st.session_state:
             st.session_state.openai_api_key = None
-        if 'chatbot' not in st.session_state:
-            st.session_state.chatbot = None
+        if 'df_manager' not in st.session_state:
+            st.session_state.df_manager = None
+        if 'query_generator' not in st.session_state:
+            st.session_state.query_generator = None
         if 'uploaded_tables' not in st.session_state:
             st.session_state.uploaded_tables = []
         if 'query_results' not in st.session_state:
@@ -28,15 +30,18 @@ class StreamlitChatBot:
     def render_sidebar(self):
         with st.sidebar:
             st.header("Settings")
-            
+
             # Input OpenAI API key
             st.session_state.openai_api_key = st.text_input("Enter OpenAI API Key", type="password")
-            if st.session_state.openai_api_key and st.session_state.chatbot is None:
-                st.session_state.chatbot = setup_chatbot(st.session_state.openai_api_key)
+            if st.session_state.openai_api_key and st.session_state.df_manager is None:
+                st.session_state.df_manager = DataFrameManager()
+                st.session_state.query_generator = QueryGenerator(
+                    st.session_state.df_manager, st.session_state.openai_api_key
+                )
                 st.success("API Key Set and Chatbot Initialized!")
 
             st.header("Data Management")
-            
+
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
             if uploaded_file:
@@ -49,7 +54,7 @@ class StreamlitChatBot:
                     st.write(f"📊 {table_name}")
 
     def handle_file_upload(self, uploaded_file):
-        """Handle file uploads and add tables to the chatbot."""
+        """Handle file uploads and add tables to the DataFrameManager."""
         file_type = uploaded_file.name.split('.')[-1].lower()
         table_name = st.text_input("Enter Table Name", value=uploaded_file.name.split('.')[0])
 
@@ -64,10 +69,10 @@ class StreamlitChatBot:
                 else:
                     st.error("Unsupported file type!")
                     return
-                
-                # Add DataFrame to chatbot's database
-                if st.session_state.chatbot:
-                    st.session_state.chatbot.df_manager.add_dataframe(
+
+                # Add DataFrame to the DataFrameManager
+                if st.session_state.df_manager:
+                    st.session_state.df_manager.add_dataframe(
                         name=table_name,
                         df=df,
                         description=f"Uploaded file: {uploaded_file.name}"
@@ -84,7 +89,7 @@ class StreamlitChatBot:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as temp_file:
             temp_file.write(uploaded_file.read())
             temp_path = temp_file.name
-        
+
         engine = create_engine(f"sqlite:///{temp_path}")
         inspector = inspect(engine)
         table_names = inspector.get_table_names()
@@ -93,7 +98,7 @@ class StreamlitChatBot:
             st.error("No tables found in the SQLite database!")
             os.unlink(temp_path)
             return None
-        
+
         selected_table = st.selectbox("Select a table to import", table_names)
         if selected_table:
             df = pd.read_sql_table(selected_table, engine)
@@ -107,19 +112,18 @@ class StreamlitChatBot:
             return
 
         user_input = st.text_input("Ask a question:")
-        if user_input and st.session_state.chatbot:
-            response = st.session_state.chatbot.process_question(user_input)
-            if "error" in response:
-                st.error(f"Error: {response['error']}")
-            else:
+        if user_input and st.session_state.query_generator:
+            try:
+                sql_query, summary_prompt = st.session_state.query_generator.generate_query(user_input)
+                result_df = st.session_state.df_manager.duckdb_conn.execute(sql_query).fetchdf()
+
                 st.write("### Query:")
-                st.code(response["query"])
+                st.code(sql_query)
                 st.write("### Results:")
-                result_df = pd.DataFrame(response["data"])
                 st.dataframe(result_df)
                 st.write("### Summary:")
-                st.info(response["summary"])
-                
+                st.info(summary_prompt)
+
                 # Store the query results for visualization
                 st.session_state.query_results = result_df
 
@@ -127,34 +131,35 @@ class StreamlitChatBot:
                 if st.button("Visualize"):
                     st.session_state.show_visualization = True
 
+            except Exception as e:
+                st.error(f"Error processing question: {str(e)}")
+
         # Visualization Section
         if st.session_state.show_visualization and st.session_state.query_results is not None:
             self.render_visualization_tab(st.session_state.query_results)
 
-    
-    
     def render_visualization_tab(self, df: pd.DataFrame):
         st.header("Visualize Your Data")
 
         # Initialize chart generator
         chart_generator = ChartCodeGenerator(api_key=st.session_state.openai_api_key)
-    
+
         # Chart customization options
         chart_type = st.selectbox("Select Chart Type", list(chart_generator.chart_templates.keys()))
-        
+
         # Get numeric columns for y-axis
         numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
-        
+
         # Select columns based on chart type
         x_axis = st.selectbox("Select X-Axis", df.columns)
-        
+
         if chart_type != "Pie Chart" and chart_type != "Histogram":
             y_axis = st.selectbox("Select Y-Axis", numeric_cols)
         else:
             y_axis = None if chart_type == "Histogram" else x_axis
-    
+
         color = st.color_picker("Pick a Color", "#636EFA")
-    
+
         # Generate chart
         if st.button("Generate Chart"):
             try:
@@ -166,11 +171,11 @@ class StreamlitChatBot:
                     color=color
                 )
                 st.plotly_chart(fig, use_container_width=True)
-                
+
                 # Add chart suggestion
                 suggestion = chart_generator.suggest_chart_type(df, x_axis, y_axis)
                 st.info(f"💡 Suggested visualization: {suggestion}")
-                
+
             except Exception as e:
                 st.error(f"Error generating chart: {str(e)}")
 
@@ -179,7 +184,6 @@ def main():
     app.setup_page()
     app.render_sidebar()
     app.render_chat_interface()
-
 
 if __name__ == "__main__":
     main()
