@@ -43,10 +43,11 @@ class StreamlitChatBot:
 
             # Show available tables and delete option
             if st.session_state.df_manager:
-                tables = st.session_state.df_manager.metadata.keys()
+                tables = list(st.session_state.df_manager.metadata.keys())
                 if tables:
                     st.subheader("Available Tables")
-                    for table_name in list(tables):
+                    refresh_needed = False  # Flag to determine if rerun is needed
+                    for table_name in tables:
                         col1, col2 = st.columns([4, 1])
                         with col1:
                             st.write(f"📊 {table_name}")
@@ -54,7 +55,11 @@ class StreamlitChatBot:
                             if st.button("❌", key=f"delete_{table_name}"):
                                 st.session_state.df_manager.delete_table(table_name)
                                 st.success(f"Table '{table_name}' deleted successfully!")
-                                st.experimental_rerun()
+                                refresh_needed = True
+
+                    # Trigger a refresh after the loop if needed
+                    if refresh_needed:
+                        st.experimental_rerun()
 
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
