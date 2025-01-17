@@ -47,7 +47,6 @@ class StreamlitChatBot:
                 if tables:
                     st.subheader("Available Tables")
                     st.caption("Double-click to delete a table.")
-                    refresh_triggered = False
                     for table_name in tables:
                         col1, col2 = st.columns([4, 1])
                         with col1:
@@ -56,11 +55,8 @@ class StreamlitChatBot:
                             if st.button("❌", key=f"delete_{table_name}"):
                                 st.session_state.df_manager.delete_table(table_name)
                                 st.success(f"Table '{table_name}' deleted successfully!")
-                                refresh_triggered = True
-
-                    # Set a refresh flag in session state
-                    if refresh_triggered:
-                        st.query_params["refresh"] = "true"
+                                st.session_state.uploaded_tables.remove(table_name)
+                                st.experimental_rerun()
 
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
@@ -92,7 +88,9 @@ class StreamlitChatBot:
                         description=f"Uploaded file: {uploaded_file.name}"
                     )
                     st.success(f"Table '{table_name}' added successfully!")
-                    st.query_params["refresh"] = "true"
+                    if table_name not in st.session_state.uploaded_tables:
+                        st.session_state.uploaded_tables.append(table_name)
+                    st.experimental_rerun()
                 else:
                     st.warning("Please set the OpenAI API key first.")
             except Exception as e:
