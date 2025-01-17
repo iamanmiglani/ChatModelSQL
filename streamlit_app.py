@@ -7,6 +7,7 @@ import os
 import plotly.express as px
 from charts import ChartCodeGenerator
 
+
 class StreamlitChatBot:
     def __init__(self):
         if 'openai_api_key' not in st.session_state:
@@ -21,6 +22,8 @@ class StreamlitChatBot:
             st.session_state.query_results = None
         if 'show_visualization' not in st.session_state:
             st.session_state.show_visualization = False
+        if 'refresh_needed' not in st.session_state:
+            st.session_state.refresh_needed = False
 
     def setup_page(self):
         st.set_page_config(page_title="AI Chatbot with Data Upload and Visualization", layout="wide")
@@ -58,15 +61,15 @@ class StreamlitChatBot:
                                 st.session_state.uploaded_tables.remove(table_name)
                                 st.session_state.refresh_needed = True
 
-            # Refresh the app after modifications
-            if st.session_state.get("refresh_needed", False):
-                st.session_state.refresh_needed = False
-                st.experimental_rerun()
-
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
             if uploaded_file:
                 self.handle_file_upload(uploaded_file)
+
+            # Refresh logic: Rebuild the UI based on session state
+            if st.session_state.get("refresh_needed", False):
+                st.session_state.refresh_needed = False
+                st.experimental_update_layout()  # Ensures layout updates dynamically without rerun
 
     def handle_file_upload(self, uploaded_file):
         """Handle file uploads and add tables to the DataFrameManager."""
