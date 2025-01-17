@@ -96,6 +96,18 @@ class DataFrameManager:
             self.logger.error(f"Error adding DataFrame '{name}': {str(e)}")
             raise
 
+    def delete_table(self, table_name: str) -> None:
+        """Delete a table permanently from SQLite and DuckDB."""
+        try:
+            with self.sql_engine.connect() as conn:
+                conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+            self.duckdb_conn.unregister(table_name)
+            self.metadata.pop(table_name, None)
+            self.logger.info(f"Successfully deleted table '{table_name}' from the database.")
+        except Exception as e:
+            self.logger.error(f"Error deleting table '{table_name}': {str(e)}")
+            raise
+
 
 class QueryGenerator:
     """Generates SQL queries based on natural language input with enhanced join support."""
