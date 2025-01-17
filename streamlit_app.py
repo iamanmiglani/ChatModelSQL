@@ -22,8 +22,6 @@ class StreamlitChatBot:
             st.session_state.query_results = None
         if 'show_visualization' not in st.session_state:
             st.session_state.show_visualization = False
-        if 'refresh_needed' not in st.session_state:
-            st.session_state.refresh_needed = False
 
     def setup_page(self):
         st.set_page_config(page_title="AI Chatbot with Data Upload and Visualization", layout="wide")
@@ -49,27 +47,28 @@ class StreamlitChatBot:
                 tables = list(st.session_state.df_manager.metadata.keys())
                 if tables:
                     st.subheader("Available Tables")
-                    st.caption("Double-click to delete a table.")
+                    st.caption("Click the ❌ button to delete a table.")
                     for table_name in tables:
                         col1, col2 = st.columns([4, 1])
                         with col1:
                             st.write(f"📊 {table_name}")
                         with col2:
                             if st.button("❌", key=f"delete_{table_name}"):
-                                st.session_state.df_manager.delete_table(table_name)
-                                st.success(f"Table '{table_name}' deleted successfully!")
-                                st.session_state.uploaded_tables.remove(table_name)
-                                st.session_state.refresh_needed = True
+                                self.delete_table(table_name)
 
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
             if uploaded_file:
                 self.handle_file_upload(uploaded_file)
 
-            # Refresh logic: Rebuild the UI based on session state
-            if st.session_state.get("refresh_needed", False):
-                st.session_state.refresh_needed = False
-                st.experimental_update_layout()  # Ensures layout updates dynamically without rerun
+    def delete_table(self, table_name):
+        """Deletes a table from the DataFrameManager and updates session state."""
+        try:
+            st.session_state.df_manager.delete_table(table_name)
+            st.session_state.uploaded_tables.remove(table_name)
+            st.success(f"Table '{table_name}' deleted successfully!")
+        except Exception as e:
+            st.error(f"Error deleting table '{table_name}': {e}")
 
     def handle_file_upload(self, uploaded_file):
         """Handle file uploads and add tables to the DataFrameManager."""
@@ -95,10 +94,8 @@ class StreamlitChatBot:
                         df=df,
                         description=f"Uploaded file: {uploaded_file.name}"
                     )
+                    st.session_state.uploaded_tables.append(table_name)
                     st.success(f"Table '{table_name}' added successfully!")
-                    if table_name not in st.session_state.uploaded_tables:
-                        st.session_state.uploaded_tables.append(table_name)
-                    st.session_state.refresh_needed = True
                 else:
                     st.warning("Please set the OpenAI API key first.")
             except Exception as e:
