@@ -10,6 +10,7 @@ import json
 import logging
 from sqlalchemy import create_engine, text
 import re
+from join import JoinHandler  # Import the JoinHandler for table relationships
 
 @dataclass
 class DataFrameMetadata:
@@ -102,11 +103,20 @@ class QueryGenerator:
     def __init__(self, df_manager: DataFrameManager, api_key: str):
         self.df_manager = df_manager
         self.openai_client = OpenAI(api_key=api_key)
+        self.join_handler = JoinHandler(
+            {name: pd.DataFrame.from_dict(meta.sample_values) for name, meta in df_manager.metadata.items()}
+        )  # Initialize JoinHandler with metadata
 
     def generate_query(self, user_question: str) -> Tuple[str, str]:
         """Generate SQL query and summary prompt from user question."""
         context = self._create_enhanced_context()
 
+        # Use JoinHandler to determine if joins are required
+        join_query = self.join_handler.generate_join_query(user_question)
+        if "No relevant tables identified" not in join_query:
+            return join_query, "Generated a query with necessary joins."
+
+        # Fallback to OpenAI-based generation if no joins required
         system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
         The tables are stored in a DuckDB database. Only return the SQL query, nothing else.
 
@@ -140,11 +150,7 @@ class QueryGenerator:
             raw_sql_query = response.choices[0].message.content
             sql_query = self._sanitize_sql_query(raw_sql_query)
 
-            if 'join' in sql_query.lower() and not self._validate_query(sql_query):
-                raise ValueError("Query validation failed - please try rephrasing your question")
-
-            summary_prompt = f"Summarize the following data in a concise, business-friendly way: [QUERY_RESULT]"
-            return sql_query, summary_prompt
+            return sql_query, "Generated a query using OpenAI assistance."
 
         except Exception as e:
             raise ValueError(f"Error generating query: {str(e)}")
@@ -176,10 +182,6 @@ class QueryGenerator:
 
             context_parts.append("\n".join(filter(None, table_info)))
 
-        relationships = self._infer_table_relationships()
-        if relationships:
-            context_parts.append("\nRelationships:\n" + "\n".join(relationships))
-
         return "\n\n".join(context_parts)
 
     def _infer_column_type(self, values: List[Any]) -> str:
@@ -194,43 +196,6 @@ class QueryGenerator:
         elif isinstance(sample, (datetime, np.datetime64)):
             return "datetime"
         return "text"
-
-    def _infer_table_relationships(self) -> List[str]:
-        """Infer potential primary-foreign key relationships between tables."""
-        relationships = []
-        tables = list(self.df_manager.metadata.values())
-
-        for i, table_a in enumerate(tables):
-            for j, table_b in enumerate(tables):
-                if i >= j:
-                    continue
-
-                for col_a in table_a.columns:
-                    for col_b in table_b.columns:
-                        if col_a == col_b or col_a.lower() == col_b.lower():
-                            relationships.append(f"Potential relationship: {table_a.name}.{col_a} -> {table_b.name}.{col_b}")
-
-        return relationships
-
-    def _validate_query(self, query: str) -> bool:
-        """Validate the generated query structure."""
-        query_lower = query.lower()
-
-        if "join" not in query_lower:
-            return True
-
-        try:
-            if not re.search(r'select .+ from .+', query_lower, re.IGNORECASE):
-                return False
-
-            join_pattern = r'join\s+(\w+)(?:\s+(?:as\s+)?(\w+))?\s+on\s+'
-            if not re.search(join_pattern, query_lower, re.IGNORECASE):
-                return False
-
-            return True
-
-        except Exception:
-            return True
 
     def _sanitize_sql_query(self, raw_query: str) -> str:
         """Clean and validate the SQL query."""
