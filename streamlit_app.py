@@ -1,11 +1,11 @@
-from chatbot import DataFrameManager, QueryGenerator
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import tempfile
+from chatbot import DataFrameManager, QueryGenerator
 from sqlalchemy import create_engine, inspect
+import tempfile
+import os
+import plotly.express as px
 from charts import ChartCodeGenerator
-
 
 class StreamlitChatBot:
     def __init__(self):
@@ -29,7 +29,7 @@ class StreamlitChatBot:
     def render_sidebar(self):
         with st.sidebar:
             st.header("Settings")
-            
+
             # Input OpenAI API key
             st.session_state.openai_api_key = st.text_input("Enter OpenAI API Key", type="password")
             if st.session_state.openai_api_key and st.session_state.df_manager is None:
@@ -40,17 +40,26 @@ class StreamlitChatBot:
                 st.success("API Key Set and Chatbot Initialized!")
 
             st.header("Data Management")
-            
+
+            # Show available tables and delete option
+            if st.session_state.df_manager:
+                tables = st.session_state.df_manager.metadata.keys()
+                if tables:
+                    st.subheader("Available Tables")
+                    for table_name in list(tables):
+                        col1, col2 = st.columns([4, 1])
+                        with col1:
+                            st.write(f"📊 {table_name}")
+                        with col2:
+                            if st.button("Delete", key=f"delete_{table_name}"):
+                                st.session_state.df_manager.delete_table(table_name)
+                                st.success(f"Table '{table_name}' deleted successfully!")
+                                st.experimental_rerun()
+
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
             if uploaded_file:
                 self.handle_file_upload(uploaded_file)
-
-            # Display available tables
-            if st.session_state.uploaded_tables:
-                st.subheader("Available Tables")
-                for table_name in st.session_state.uploaded_tables:
-                    st.write(f"📊 {table_name}")
 
     def handle_file_upload(self, uploaded_file):
         """Handle file uploads and add tables to the DataFrameManager."""
@@ -178,11 +187,13 @@ class StreamlitChatBot:
             except Exception as e:
                 st.error(f"Error generating chart: {str(e)}")
 
+
 def main():
     app = StreamlitChatBot()
     app.setup_page()
     app.render_sidebar()
     app.render_chat_interface()
+
 
 if __name__ == "__main__":
     main()
