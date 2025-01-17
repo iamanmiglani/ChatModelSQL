@@ -54,17 +54,22 @@ class StreamlitChatBot:
                         with col2:
                             if st.button("❌", key=f"delete_{table_name}"):
                                 st.session_state.df_manager.delete_table(table_name)
-                                st.success(f"Table '{table_name}' deleted successfully!")
+                                st.session_state.uploaded_tables = [t for t in tables if t != table_name]
                                 refresh_needed = True
 
                     # Trigger a refresh after the loop if needed
                     if refresh_needed:
-                        st.experimental_rerun()
+                        st.session_state.refresh_needed = True
 
             # Upload file
             uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
             if uploaded_file:
                 self.handle_file_upload(uploaded_file)
+
+        # Perform refresh outside the sidebar loop
+        if st.session_state.get("refresh_needed"):
+            st.session_state.refresh_needed = False
+            st.experimental_rerun()
 
     def handle_file_upload(self, uploaded_file):
         """Handle file uploads and add tables to the DataFrameManager."""
