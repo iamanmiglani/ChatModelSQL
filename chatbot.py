@@ -4,7 +4,7 @@ import duckdb
 import numpy as np
 from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
-from openai import OpenAI  # Updated import
+from openai import OpenAI
 from datetime import datetime
 import json
 import logging
@@ -101,7 +101,6 @@ class QueryGenerator:
 
     def __init__(self, df_manager: DataFrameManager, api_key: str):
         self.df_manager = df_manager
-        # Updated OpenAI client initialization
         self.openai_client = OpenAI(api_key=api_key)
 
     def generate_query(self, user_question: str) -> Tuple[str, str]:
@@ -110,11 +109,11 @@ class QueryGenerator:
 
         system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
         The tables are stored in a DuckDB database. Only return the SQL query, nothing else.
-        
+
         Guidelines:
         1. For simple queries on a single table, use straightforward SELECT statements
         2. When joining tables:
-           - Use explicit join types (LEFT JOIN, RIGHT JOIN, INNER JOIN)
+           - Use explicit join types (LEFT JOIN, RIGHT JOIN, FULL JOIN) as required
            - Match columns that appear to be related (e.g., id fields, matching names)
            - Use clear ON conditions
         3. Include WHERE, GROUP BY, or HAVING clauses as needed
@@ -139,8 +138,7 @@ class QueryGenerator:
 
             raw_sql_query = response.choices[0].message.content
             sql_query = self._sanitize_sql_query(raw_sql_query)
-            
-            # Only validate if query contains joins
+
             if 'join' in sql_query.lower() and not self._validate_query(sql_query):
                 raise ValueError("Query validation failed - please try rephrasing your question")
 
@@ -153,7 +151,7 @@ class QueryGenerator:
     def _create_enhanced_context(self) -> str:
         """Create enhanced context string with table relationships."""
         context_parts = []
-        
+
         for name, meta in self.df_manager.metadata.items():
             table_info = [
                 f"\nTable: {name}",
@@ -161,22 +159,22 @@ class QueryGenerator:
                 f"Total Rows: {meta.total_rows}",
                 "Columns:"
             ]
-            
+
             for col in meta.columns:
                 sample_values = meta.sample_values.get(col, [])
                 cardinality = meta.cardinality.get(col, 0)
                 data_type = self._infer_column_type(sample_values)
-                
+
                 col_info = [f"  - {col} ({data_type})"]
                 if cardinality:
                     col_info.append(f"Unique values: {cardinality}")
                 if sample_values:
                     col_info.append(f"Examples: {', '.join(str(v) for v in sample_values[:3])}")
-                    
+
                 table_info.append(" | ".join(col_info))
-            
+
             context_parts.append("\n".join(filter(None, table_info)))
-        
+
         return "\n\n".join(context_parts)
 
     def _infer_column_type(self, values: List[Any]) -> str:
@@ -195,97 +193,33 @@ class QueryGenerator:
     def _validate_query(self, query: str) -> bool:
         """Validate the generated query structure."""
         query_lower = query.lower()
-        
-        # Skip validation for simple queries
+
         if "join" not in query_lower:
             return True
-            
+
         try:
-            # Basic SQL structure check
             if not re.search(r'select .+ from .+', query_lower, re.IGNORECASE):
                 return False
-                
-            # Validate join syntax
-            if "join" in query_lower:
-                join_pattern = r'join\s+(\w+)(?:\s+(?:as\s+)?(\w+))?\s+on\s+'
-                if not re.search(join_pattern, query_lower, re.IGNORECASE):
-                    return False
-                    
+
+            join_pattern = r'join\s+(\w+)(?:\s+(?:as\s+)?(\w+))?\s+on\s+'
+            if not re.search(join_pattern, query_lower, re.IGNORECASE):
+                return False
+
             return True
-            
+
         except Exception:
-            # If validation fails, assume query is valid
             return True
 
     def _sanitize_sql_query(self, raw_query: str) -> str:
         """Clean and validate the SQL query."""
-        # Remove markdown formatting
         clean_query = raw_query.replace("```sql", "").replace("```", "").strip()
-        
-        # Extract the SQL statement
+
         sql_pattern = re.compile(r"(SELECT|WITH)\s+", re.IGNORECASE)
         match = sql_pattern.search(clean_query)
-        
+
         if not match:
             raise ValueError("No valid SQL query found in the response")
-            
+
         query = clean_query[match.start():].strip()
         return re.split(r';\s*--|\s*--|\s*;', query)[0].strip()
 
-
-class ChatBot:
-    """Main chatbot class that handles user interactions."""
-
-    def __init__(self, df_manager: DataFrameManager, query_generator: QueryGenerator):
-        self.df_manager = df_manager
-        self.query_generator = query_generator
-        self.logger = logging.getLogger(__name__)
-
-    def process_question(self, question: str) -> Dict[str, Any]:
-        """Process user question and return formatted results."""
-        try:
-            # Generate and execute query
-            sql_query, summary_prompt = self.query_generator.generate_query(question)
-            result_df = self.df_manager.duckdb_conn.execute(sql_query).fetchdf()
-
-            # Generate result summary
-            summary_messages = [
-                {"role": "system", "content": "You are a data analyst. Provide a clear, concise summary of the data results."},
-                {"role": "user", "content": summary_prompt.replace("[QUERY_RESULT]", result_df.to_string())}
-            ]
-
-            summary_response = self.query_generator.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=summary_messages,
-                temperature=0.7
-            )
-
-            return {
-                "query": sql_query,
-                "data": result_df.to_dict(orient="records"),
-                "summary": summary_response.choices[0].message.content,
-                "timestamp": datetime.now().isoformat()
-            }
-
-        except Exception as e:
-            self.logger.error(f"Error processing question: {str(e)}")
-            return {"error": str(e)}
-
-
-def setup_chatbot(api_key: str) -> ChatBot:
-    """Initialize and configure the chatbot."""
-    try:
-        # Validate API key by creating a test client
-        test_client = OpenAI(api_key=api_key)
-        # Test the API key with a minimal request
-        test_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "test"}],
-            max_tokens=5
-        )
-        
-        df_manager = DataFrameManager()
-        query_generator = QueryGenerator(df_manager, api_key)
-        return ChatBot(df_manager, query_generator)
-    except Exception as e:
-        raise ValueError(f"Failed to initialize chatbot with provided API key: {str(e)}")
