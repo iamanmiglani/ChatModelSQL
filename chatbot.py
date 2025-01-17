@@ -2,9 +2,7 @@ import os
 import pandas as pd
 import duckdb
 import numpy as np
-# from typing import List, Dict, Any, Tuple
-from typing_extensions import Any, Dict, List, Tuple
-
+from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
 from openai import OpenAI
 from datetime import datetime
@@ -113,12 +111,23 @@ class QueryGenerator:
         """Generate SQL query and summary prompt from user question."""
         context = self._create_enhanced_context()
 
-        # Use JoinHandler to determine if joins are required
-        join_query = self.join_handler.generate_join_query(user_question)
-        if "No relevant tables identified" not in join_query:
+        # Determine if joins are required
+        join_details = self.join_handler.get_join_details(user_question)
+        relevant_tables = join_details["relevant_tables"]
+        joins = join_details["joins"]
+
+        # If only one table is relevant, generate a simple query
+        if len(relevant_tables) == 1:
+            table_name = relevant_tables[0]
+            sql_query = f"SELECT * FROM {table_name}"
+            return sql_query, f"Simple query for table: {table_name}"
+
+        # If joins are required, generate a join query
+        if joins:
+            join_query = self.join_handler.generate_join_query(user_question)
             return join_query, "Generated a query with necessary joins."
 
-        # Fallback to OpenAI-based generation if no joins required
+        # Fallback to OpenAI-based generation if no relevant tables or joins are found
         system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
         The tables are stored in a DuckDB database. Only return the SQL query, nothing else.
 
