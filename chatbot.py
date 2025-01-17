@@ -95,6 +95,14 @@ class DataFrameManager:
             self.logger.error(f"Error adding DataFrame '{name}': {str(e)}")
             raise
 
+    def get_table_info(self) -> Dict[str, Dict[str, Any]]:
+        """Get information about all registered tables."""
+        return {name: {
+            "columns": meta.columns,
+            "rows": meta.total_rows,
+            "description": meta.description
+        } for name, meta in self.metadata.items()}
+
 
 class QueryGenerator:
     """Generates SQL queries based on natural language input with enhanced join support."""
@@ -110,19 +118,18 @@ class QueryGenerator:
         system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
         The tables are stored in a DuckDB database. Only return the SQL query, nothing else.
         
-        Important guidelines for generating queries:
-        1. When joining tables, explicitly specify the join type (LEFT JOIN, RIGHT JOIN, INNER JOIN, FULL OUTER JOIN)
-        2. Always use table aliases for clarity (e.g., 't1', 't2', etc.)
-        3. Specify the full table.column name in SELECT statements to avoid ambiguity
-        4. Include appropriate JOIN conditions based on the relationships described in the metadata
+        Guidelines:
+        1. For simple queries on a single table, use straightforward SELECT statements
+        2. When joining tables:
+           - Use explicit join types (LEFT JOIN, RIGHT JOIN, INNER JOIN)
+           - Match columns that appear to be related (e.g., id fields, matching names)
+           - Use clear ON conditions
+        3. Include WHERE, GROUP BY, or HAVING clauses as needed
+        4. Use appropriate aggregations (SUM, COUNT, AVG) when needed
+        5. Handle NULL values appropriately
         
-        Available tables and their metadata with relationships:
+        Available tables and their metadata:
         {context}
-        
-        Example of a proper join query:
-        SELECT t1.column1, t2.column2 
-        FROM table1 t1 
-        LEFT JOIN table2 t2 ON t1.id = t2.table1_id
         """
 
         messages = [
@@ -130,27 +137,30 @@ class QueryGenerator:
             {"role": "user", "content": user_question}
         ]
 
-        response = self.openai_client.chat.completions.create(
-            model="gpt-4-turbo-preview",  # Using GPT-4 for better query generation
-            messages=messages,
-            temperature=0
-        )
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                temperature=0
+            )
 
-        raw_sql_query = response.choices[0].message.content
-        sql_query = self._sanitize_sql_query(raw_sql_query)
+            raw_sql_query = response.choices[0].message.content
+            sql_query = self._sanitize_sql_query(raw_sql_query)
+            
+            # Only validate if query contains joins
+            if 'join' in sql_query.lower() and not self._validate_query(sql_query):
+                raise ValueError("Query validation failed - please try rephrasing your question")
 
-        # Validate the query structure
-        if not self._validate_query(sql_query):
-            raise ValueError("Generated query does not meet the required standards")
+            summary_prompt = f"Summarize the following data in a concise, business-friendly way: [QUERY_RESULT]"
+            return sql_query, summary_prompt
 
-        summary_prompt = f"Summarize the following data in a concise, business-friendly way: [QUERY_RESULT]"
-        return sql_query, summary_prompt
+        except Exception as e:
+            raise ValueError(f"Error generating query: {str(e)}")
 
     def _create_enhanced_context(self) -> str:
-        """Create enhanced context string from DataFrame metadata with relationship information."""
-        context = []
+        """Create enhanced context string with table relationships."""
+        context_parts = []
         
-        # First pass: Basic table information
         for name, meta in self.df_manager.metadata.items():
             table_info = [
                 f"\nTable: {name}",
@@ -159,81 +169,75 @@ class QueryGenerator:
                 "Columns:"
             ]
             
-            # Enhanced column information with data types and relationships
             for col in meta.columns:
                 sample_values = meta.sample_values.get(col, [])
                 cardinality = meta.cardinality.get(col, 0)
+                data_type = self._infer_column_type(sample_values)
                 
-                # Infer potential relationships based on column names and patterns
-                relationship_info = self._infer_relationships(name, col, self.df_manager.metadata)
-                
-                col_info = f"  - {col}"
-                if relationship_info:
-                    col_info += f" (Potential join key: {relationship_info})"
+                col_info = [f"  - {col} ({data_type})"]
                 if cardinality:
-                    col_info += f" (Unique values: {cardinality})"
+                    col_info.append(f"Unique values: {cardinality}")
                 if sample_values:
-                    col_info += f" (Sample values: {', '.join(str(v) for v in sample_values[:3])})"
-                
-                table_info.append(col_info)
+                    col_info.append(f"Examples: {', '.join(str(v) for v in sample_values[:3])}")
+                    
+                table_info.append(" | ".join(col_info))
             
-            context.append("\n".join(filter(None, table_info)))
+            context_parts.append("\n".join(filter(None, table_info)))
+        
+        return "\n\n".join(context_parts)
 
-        return "\n\n".join(context)
-
-    def _infer_relationships(self, table_name: str, column_name: str, metadata: Dict[str, Any]) -> str:
-        """Infer potential relationships between tables based on column names."""
-        relationship_patterns = [
-            (r'(\w+)_id$', '{}_id matches table {}'),
-            (r'id_(\w+)$', 'id_{} matches table {}'),
-            (r'(\w+)_key$', '{}_key might relate to table {}'),
-            (r'fk_(\w+)$', 'foreign key might relate to table {}')
-        ]
-
-        for pattern, message in relationship_patterns:
-            match = re.match(pattern, column_name.lower())
-            if match:
-                related_table = match.group(1)
-                # Check if the inferred table exists in our metadata
-                for meta_table_name in metadata.keys():
-                    if related_table in meta_table_name.lower():
-                        return message.format(related_table, meta_table_name)
-        return ""
+    def _infer_column_type(self, values: List[Any]) -> str:
+        """Infer the data type of a column from its values."""
+        if not values:
+            return "unknown"
+        sample = values[0]
+        if isinstance(sample, (int, np.integer)):
+            return "integer"
+        elif isinstance(sample, (float, np.floating)):
+            return "numeric"
+        elif isinstance(sample, (datetime, np.datetime64)):
+            return "datetime"
+        return "text"
 
     def _validate_query(self, query: str) -> bool:
-        """Validate the generated query for proper join syntax and table references."""
+        """Validate the generated query structure."""
         query_lower = query.lower()
         
-        # Check for proper table aliases in joins
-        if "join" in query_lower and not re.search(r'(\w+)\s+(?:as\s+)?[a-z][0-9a-z]*\s+(?:left|right|inner|full)', query_lower, re.IGNORECASE):
-            return False
-
-        # Check for fully qualified column names in SELECT
-        if not re.search(r'select\s+(?:[a-z][0-9a-z]*\.)', query_lower, re.IGNORECASE):
-            return False
-
-        # Ensure JOIN conditions are present when using JOIN
-        if "join" in query_lower and not re.search(r'join\s+\w+\s+(?:as\s+)?[a-z][0-9a-z]*\s+on\s+', query_lower, re.IGNORECASE):
-            return False
-
-        return True
+        # Skip validation for simple queries
+        if "join" not in query_lower:
+            return True
+            
+        try:
+            # Basic SQL structure check
+            if not re.search(r'select .+ from .+', query_lower, re.IGNORECASE):
+                return False
+                
+            # Validate join syntax
+            if "join" in query_lower:
+                join_pattern = r'join\s+(\w+)(?:\s+(?:as\s+)?(\w+))?\s+on\s+'
+                if not re.search(join_pattern, query_lower, re.IGNORECASE):
+                    return False
+                    
+            return True
+            
+        except Exception:
+            # If validation fails, assume query is valid
+            return True
 
     def _sanitize_sql_query(self, raw_query: str) -> str:
-        """Sanitize and validate the generated SQL query."""
-        # Remove markdown code blocks
-        raw_query = raw_query.replace("```sql", "").replace("```", "").strip()
-
-        # Use regex to find the first SQL-like statement
+        """Clean and validate the SQL query."""
+        # Remove markdown formatting
+        clean_query = raw_query.replace("```sql", "").replace("```", "").strip()
+        
+        # Extract the SQL statement
         sql_pattern = re.compile(r"(SELECT|WITH)\s+", re.IGNORECASE)
-        match = sql_pattern.search(raw_query)
-
-        if match:
-            sanitized_query = raw_query[match.start():].strip()
-            # Remove any trailing statements or comments
-            sanitized_query = re.split(r';\s*--|\s*--|\s*;', sanitized_query)[0].strip()
-            return sanitized_query
-        else:
-            raise ValueError("No valid SQL query found in the response.")
+        match = sql_pattern.search(clean_query)
+        
+        if not match:
+            raise ValueError("No valid SQL query found in the response")
+            
+        query = clean_query[match.start():].strip()
+        return re.split(r';\s*--|\s*--|\s*;', query)[0].strip()
 
 
 class ChatBot:
@@ -242,15 +246,18 @@ class ChatBot:
     def __init__(self, df_manager: DataFrameManager, query_generator: QueryGenerator):
         self.df_manager = df_manager
         self.query_generator = query_generator
+        self.logger = logging.getLogger(__name__)
 
     def process_question(self, question: str) -> Dict[str, Any]:
-        """Process user question and return results with summary."""
+        """Process user question and return formatted results."""
         try:
+            # Generate and execute query
             sql_query, summary_prompt = self.query_generator.generate_query(question)
             result_df = self.df_manager.duckdb_conn.execute(sql_query).fetchdf()
 
+            # Generate result summary
             summary_messages = [
-                {"role": "system", "content": "You are a data analyst. Provide a concise summary of the data."},
+                {"role": "system", "content": "You are a data analyst. Provide a clear, concise summary of the data results."},
                 {"role": "user", "content": summary_prompt.replace("[QUERY_RESULT]", result_df.to_string())}
             ]
 
@@ -268,12 +275,12 @@ class ChatBot:
             }
 
         except Exception as e:
-            logging.error(f"Error processing question: {str(e)}")
+            self.logger.error(f"Error processing question: {str(e)}")
             return {"error": str(e)}
 
 
 def setup_chatbot(api_key: str) -> ChatBot:
-    """Setup and initialize the chatbot with the provided API key."""
+    """Initialize and configure the chatbot."""
     df_manager = DataFrameManager()
     query_generator = QueryGenerator(df_manager, api_key)
     return ChatBot(df_manager, query_generator)
