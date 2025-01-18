@@ -122,7 +122,7 @@ class QueryGenerator:
 
     def generate_query(self, user_question: str) -> Tuple[str, str]:
         """Generate SQL query and summary prompt from user question."""
-        context = self._create_enhanced_context()
+        context = self._create_limited_context()
 
         # Determine if joins are required
         join_details = self.join_handler.get_join_details(user_question)
@@ -156,9 +156,14 @@ class QueryGenerator:
             # Execute the query to fetch results
             result_df = self.df_manager.duckdb_conn.execute(sql_query).fetchdf()
 
+            # Limit rows and columns for summary to stay within token limits
+            summary_df = result_df.head(10)  # Limit to 10 rows
+            if len(summary_df.columns) > 10:
+                summary_df = summary_df.iloc[:, :10]  # Limit to 10 columns
+
             # Generate summary using OpenAI or manual logic
             summary_prompt = f"""Provide a concise and crisp summary for the following table:
-            {result_df.to_markdown(index=False)}
+            {summary_df.to_markdown(index=False)}
 
             Guidelines:
             - Mention the number of rows and columns.
@@ -176,34 +181,19 @@ class QueryGenerator:
         except Exception as e:
             raise ValueError(f"Error generating query: {str(e)}")
 
-    def _create_enhanced_context(self) -> str:
-        """Create enhanced context string with table relationships."""
+    def _create_limited_context(self) -> str:
+        """Create a limited context string to stay within token limits."""
         context_parts = []
 
         for name, meta in self.df_manager.metadata.items():
             table_info = [
-                f"\nTable: {name}",
-                f"Description: {meta.description}" if meta.description else "",
+                f"Table: {name}",
                 f"Total Rows: {meta.total_rows}",
-                "Columns:"
+                f"Columns: {', '.join(meta.columns[:10])}"  # Limit to 10 columns
             ]
+            context_parts.append("\n".join(table_info))
 
-            for col in meta.columns:
-                sample_values = meta.sample_values.get(col, [])
-                cardinality = meta.cardinality.get(col, 0)
-                data_type = self._infer_column_type(sample_values)
-
-                col_info = [f"  - {col} ({data_type})"]
-                if cardinality:
-                    col_info.append(f"Unique values: {cardinality}")
-                if sample_values:
-                    col_info.append(f"Examples: {', '.join(str(v) for v in sample_values[:3])}")
-
-                table_info.append(" | ".join(col_info))
-
-            context_parts.append("\n".join(filter(None, table_info)))
-
-        return "\n\n".join(context_parts)
+        return "\n\n".join(context_parts[:5])  # Limit to 5 tables
 
     def _infer_column_type(self, values: List[Any]) -> str:
         """Infer the data type of a column from its values."""
