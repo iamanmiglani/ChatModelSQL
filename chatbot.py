@@ -122,78 +122,132 @@ class QueryGenerator:
 
     def generate_query(self, user_question: str) -> Tuple[str, str]:
         """Generate SQL query and summary prompt from user question."""
-        context = self._create_limited_context()
+        context = self._create_enhanced_context()
 
         # Determine if joins are required
         join_details = self.join_handler.get_join_details(user_question)
         relevant_tables = join_details["relevant_tables"]
         joins = join_details["joins"]
 
+        # If only one table is relevant, generate a simple query
+        if len(relevant_tables) == 1:
+            table_name = relevant_tables[0]
+            sql_query = f"SELECT * FROM {table_name}"
+            return sql_query, self._summarize_output_table(table_name)
+
+        # If joins are required, generate a join query
+        if joins:
+            join_query = self.join_handler.generate_join_query(user_question)
+            output_table_summary = self._summarize_output_table_from_query(join_query)
+            return join_query, output_table_summary
+
+        # Fallback to OpenAI-based generation if no relevant tables or joins are found
+        system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
+        The tables are stored in a DuckDB database. Only return the SQL query, nothing else.
+
+        Guidelines:
+        1. For simple queries on a single table, use straightforward SELECT statements
+        2. When joining tables:
+           - Use explicit join types (LEFT JOIN, RIGHT JOIN, FULL JOIN) as required
+           - Identify primary and foreign key relationships automatically
+           - Match columns that appear to be related (e.g., id fields, matching names)
+           - Use clear ON conditions
+        3. Include WHERE, GROUP BY, or HAVING clauses as needed
+        4. Use appropriate aggregations (SUM, COUNT, AVG) when needed
+        5. Handle NULL values appropriately
+        
+        Available tables and their metadata:
+        {context}
+        """
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_question}
+        ]
+
         try:
-            # Generate query based on joins or fallback to OpenAI for SQL generation
-            if len(relevant_tables) == 1:
-                table_name = relevant_tables[0]
-                sql_query = f"SELECT * FROM {table_name}"
-            elif joins:
-                sql_query = self.join_handler.generate_join_query(user_question)
-            else:
-                system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
-                The tables are stored in a DuckDB database. Only return the SQL query, nothing else.
-                Available tables and their metadata:
-                {context}"""
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_question}
-                ]
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=messages,
-                    temperature=0
-                )
-                raw_sql_query = response.choices[0].message.content
-                sql_query = self._sanitize_sql_query(raw_sql_query)
-
-            # Execute the query to fetch results
-            result_df = self.df_manager.duckdb_conn.execute(sql_query).fetchdf()
-
-            # Limit rows and columns for summary to stay within token limits
-            summary_df = result_df.head(10)  # Limit to 10 rows
-            if len(summary_df.columns) > 10:
-                summary_df = summary_df.iloc[:, :10]  # Limit to 10 columns
-
-            # Generate summary using OpenAI or manual logic
-            summary_prompt = f"""Provide a concise and crisp summary for the following table:
-            {summary_df.to_markdown(index=False)}
-
-            Guidelines:
-            - Mention the number of rows and columns.
-            - Highlight key trends, patterns, or anomalies.
-            - Keep it brief and professional."""
-            summary_response = self.openai_client.chat.completions.create(
+            response = self.openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": summary_prompt}],
+                messages=messages,
                 temperature=0
             )
-            summary = summary_response.choices[0].message.content.strip()
 
-            return sql_query, summary
+            raw_sql_query = response.choices[0].message.content
+            sql_query = self._sanitize_sql_query(raw_sql_query)
+            output_table_summary = self._summarize_output_table_from_query(sql_query)
+
+            return sql_query, output_table_summary
 
         except Exception as e:
             raise ValueError(f"Error generating query: {str(e)}")
 
-    def _create_limited_context(self) -> str:
-        """Create a limited context string to stay within token limits."""
+    def _create_enhanced_context(self) -> str:
+        """Create enhanced context string with table relationships."""
         context_parts = []
 
         for name, meta in self.df_manager.metadata.items():
             table_info = [
-                f"Table: {name}",
+                f"\nTable: {name}",
+                f"Description: {meta.description}" if meta.description else "",
                 f"Total Rows: {meta.total_rows}",
-                f"Columns: {', '.join(meta.columns[:10])}"  # Limit to 10 columns
+                "Columns:"
             ]
-            context_parts.append("\n".join(table_info))
 
-        return "\n\n".join(context_parts[:5])  # Limit to 5 tables
+            for col in meta.columns:
+                sample_values = meta.sample_values.get(col, [])
+                cardinality = meta.cardinality.get(col, 0)
+                data_type = self._infer_column_type(sample_values)
+
+                col_info = [f"  - {col} ({data_type})"]
+                if cardinality:
+                    col_info.append(f"Unique values: {cardinality}")
+                if sample_values:
+                    col_info.append(f"Examples: {', '.join(str(v) for v in sample_values[:3])}")
+
+                table_info.append(" | ".join(col_info))
+
+            context_parts.append("\n".join(filter(None, table_info)))
+
+        return "\n\n".join(context_parts)
+
+    def _summarize_output_table(self, table_name: str) -> str:
+        """Summarize the output table based on its metadata."""
+        if table_name not in self.df_manager.metadata:
+            return f"Table '{table_name}' not found in metadata."
+
+        meta = self.df_manager.metadata[table_name]
+        summary = [
+            f"Summary of table '{meta.name}':",
+            f"- Total Rows: {meta.total_rows}",
+            "- Columns:"
+        ]
+
+        for col in meta.columns:
+            cardinality = meta.cardinality.get(col, 0)
+            examples = ", ".join(map(str, meta.sample_values.get(col, [])[:3]))
+            summary.append(f"  - {col}: {cardinality} unique values, examples: {examples}")
+
+        return "\n".join(summary)
+
+    def _summarize_output_table_from_query(self, query: str) -> str:
+        """Execute the query and summarize the output table."""
+        try:
+            df = self.df_manager.duckdb_conn.execute(query).fetchdf()
+            total_rows = len(df)
+            summary = [
+                f"Summary of query output:",
+                f"- Total Rows: {total_rows}",
+                "- Columns:"
+            ]
+
+            for col in df.columns:
+                unique_values = df[col].nunique()
+                examples = ", ".join(map(str, df[col].dropna().sample(min(3, total_rows)).tolist()))
+                summary.append(f"  - {col}: {unique_values} unique values, examples: {examples}")
+
+            return "\n".join(summary)
+        except Exception as e:
+            return f"Error summarizing output table: {str(e)}"
 
     def _infer_column_type(self, values: List[Any]) -> str:
         """Infer the data type of a column from its values."""
