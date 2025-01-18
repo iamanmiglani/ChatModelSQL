@@ -129,52 +129,49 @@ class QueryGenerator:
         relevant_tables = join_details["relevant_tables"]
         joins = join_details["joins"]
 
-        # If only one table is relevant, generate a simple query
-        if len(relevant_tables) == 1:
-            table_name = relevant_tables[0]
-            sql_query = f"SELECT * FROM {table_name}"
-            return sql_query, f"Simple query for table: {table_name}"
-
-        # If joins are required, generate a join query
-        if joins:
-            join_query = self.join_handler.generate_join_query(user_question)
-            return join_query, "Generated a query with necessary joins."
-
-        # Fallback to OpenAI-based generation if no relevant tables or joins are found
-        system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
-        The tables are stored in a DuckDB database. Only return the SQL query, nothing else.
-
-        Guidelines:
-        1. For simple queries on a single table, use straightforward SELECT statements
-        2. When joining tables:
-           - Use explicit join types (LEFT JOIN, RIGHT JOIN, FULL JOIN) as required
-           - Identify primary and foreign key relationships automatically
-           - Match columns that appear to be related (e.g., id fields, matching names)
-           - Use clear ON conditions
-        3. Include WHERE, GROUP BY, or HAVING clauses as needed
-        4. Use appropriate aggregations (SUM, COUNT, AVG) when needed
-        5. Handle NULL values appropriately
-        
-        Available tables and their metadata:
-        {context}
-        """
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_question}
-        ]
-
         try:
-            response = self.openai_client.chat.completions.create(
+            # Generate query based on joins or fallback to OpenAI for SQL generation
+            if len(relevant_tables) == 1:
+                table_name = relevant_tables[0]
+                sql_query = f"SELECT * FROM {table_name}"
+            elif joins:
+                sql_query = self.join_handler.generate_join_query(user_question)
+            else:
+                system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
+                The tables are stored in a DuckDB database. Only return the SQL query, nothing else.
+                Available tables and their metadata:
+                {context}"""
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_question}
+                ]
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    temperature=0
+                )
+                raw_sql_query = response.choices[0].message.content
+                sql_query = self._sanitize_sql_query(raw_sql_query)
+
+            # Execute the query to fetch results
+            result_df = self.df_manager.duckdb_conn.execute(sql_query).fetchdf()
+
+            # Generate summary using OpenAI or manual logic
+            summary_prompt = f"""Provide a concise and crisp summary for the following table:
+            {result_df.to_markdown(index=False)}
+
+            Guidelines:
+            - Mention the number of rows and columns.
+            - Highlight key trends, patterns, or anomalies.
+            - Keep it brief and professional."""
+            summary_response = self.openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=messages,
+                messages=[{"role": "user", "content": summary_prompt}],
                 temperature=0
             )
+            summary = summary_response.choices[0].message.content.strip()
 
-            raw_sql_query = response.choices[0].message.content
-            sql_query = self._sanitize_sql_query(raw_sql_query)
-
-            return sql_query, "Generated a query using OpenAI assistance."
+            return sql_query, summary
 
         except Exception as e:
             raise ValueError(f"Error generating query: {str(e)}")
