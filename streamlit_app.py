@@ -1,212 +1,235 @@
-import streamlit as st
-import pandas as pd
-from chatbot import DataFrameManager, QueryGenerator
-from sqlalchemy import create_engine, inspect
-import tempfile
+# Base line 2 (tests required)
 import os
-import plotly.express as px
-from charts import ChartCodeGenerator
+import pandas as pd
+import duckdb
+import numpy as np
+from typing import List, Dict, Any, Tuple
+from dataclasses import dataclass
+from openai import OpenAI
+from datetime import datetime
+import json
+import logging
+from sqlalchemy import create_engine, text
+import re
+from join import JoinHandler  # Import the JoinHandler for table relationships
+
+@dataclass
+class DataFrameMetadata:
+    """Stores metadata about each DataFrame for better context handling."""
+    name: str
+    columns: List[str]
+    sample_values: Dict[str, List[Any]]
+    cardinality: Dict[str, int]
+    total_rows: int
+    description: str = ""
+    source_type: str = ""
+    last_updated: datetime = datetime.now()
 
 
-class StreamlitChatBot:
-    def __init__(self):
-        if 'openai_api_key' not in st.session_state:
-            st.session_state.openai_api_key = None
-        if 'df_manager' not in st.session_state:
-            st.session_state.df_manager = None
-        if 'query_generator' not in st.session_state:
-            st.session_state.query_generator = None
-        if 'uploaded_tables' not in st.session_state:
-            st.session_state.uploaded_tables = []
-        if 'query_results' not in st.session_state:
-            st.session_state.query_results = None
-        if 'show_visualization' not in st.session_state:
-            st.session_state.show_visualization = False
+class DataFrameManager:
+    """Manages multiple DataFrames using both DuckDB and SQLite."""
 
-    def setup_page(self):
-        st.set_page_config(page_title="AI Chatbot with Data Upload and Visualization", layout="wide")
-        st.title("AI Chatbot with Data Management and Visualization")
+    def __init__(self, sql_db_path: str = "app_data.db"):
+        self.duckdb_conn = duckdb.connect(database=':memory:', read_only=False)
+        self.sql_engine = create_engine(f'sqlite:///{sql_db_path}')
+        self.metadata: Dict[str, DataFrameMetadata] = {}
+        self.setup_logging()
+        self.load_existing_tables()
 
-    def render_sidebar(self):
-        with st.sidebar:
-            st.header("Settings")
+    def setup_logging(self):
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        self.logger = logging.getLogger(__name__)
 
-            # Input OpenAI API key
-            st.session_state.openai_api_key = st.text_input("Enter OpenAI API Key", type="password")
-            if st.session_state.openai_api_key and st.session_state.df_manager is None:
-                st.session_state.df_manager = DataFrameManager()
-                st.session_state.query_generator = QueryGenerator(
-                    st.session_state.df_manager, st.session_state.openai_api_key
-                )
-                st.success("API Key Set and Chatbot Initialized!")
-
-            st.header("Data Management")
-
-            # Show available tables and delete option
-            if st.session_state.df_manager:
-                tables = list(st.session_state.df_manager.metadata.keys())
-                if tables:
-                    st.subheader("Available Tables")
-                    st.caption("Double Click ❌ to delete a table.")
-                    for table_name in tables:
-                        col1, col2 = st.columns([4, 1])
-                        with col1:
-                            st.write(f"📊 {table_name}")
-                        with col2:
-                            if st.button("❌", key=f"delete_{table_name}"):
-                                self.delete_table(table_name)
-
-            # Upload file
-            uploaded_file = st.file_uploader("Upload a Data File", type=["csv", "xlsx", "xls", "db"])
-            if uploaded_file:
-                self.handle_file_upload(uploaded_file)
-
-    def delete_table(self, table_name):
-        """Deletes a table from the DataFrameManager and updates session state."""
+    def load_existing_tables(self):
+        """Load existing tables from SQLite database into DuckDB."""
         try:
-            st.session_state.df_manager.delete_table(table_name)
-            st.session_state.uploaded_tables.remove(table_name)
-            st.success(f"Table '{table_name}' deleted successfully!")
-        except Exception as e:
-            st.error(f"Error deleting table '{table_name}': {e}")
+            with self.sql_engine.connect() as conn:
+                tables = pd.read_sql(
+                    text("SELECT name FROM sqlite_master WHERE type='table'"),
+                    conn
+                )
 
-    def handle_file_upload(self, uploaded_file):
-        """Handle file uploads and add tables to the DataFrameManager."""
-        file_type = uploaded_file.name.split('.')[-1].lower()
-        table_name = st.text_input("Enter Table Name", value=uploaded_file.name.split('.')[0])
-
-        if st.button("Add Table"):
-            try:
-                if file_type == "csv":
-                    df = pd.read_csv(uploaded_file)
-                elif file_type in ["xls", "xlsx"]:
-                    df = pd.read_excel(uploaded_file)
-                elif file_type == "db":
-                    df = self.load_table_from_sqlite(uploaded_file)
-                else:
-                    st.error("Unsupported file type!")
+                if tables.empty:
+                    self.logger.info("No tables found in the SQLite database.")
                     return
 
-                # Add DataFrame to the DataFrameManager
-                if st.session_state.df_manager:
-                    st.session_state.df_manager.add_dataframe(
+                for table_name in tables['name']:
+                    df = pd.read_sql_table(table_name, conn)
+                    self.duckdb_conn.register(table_name, df)
+
+                    self.metadata[table_name] = DataFrameMetadata(
                         name=table_name,
-                        df=df,
-                        description=f"Uploaded file: {uploaded_file.name}"
+                        columns=df.columns.tolist(),
+                        sample_values={col: df[col].dropna().sample(min(5, len(df))).tolist()
+                                       for col in df.columns},
+                        cardinality={col: df[col].nunique() for col in df.columns},
+                        total_rows=len(df)
                     )
-                    st.session_state.uploaded_tables.append(table_name)
-                    st.success(f"Table '{table_name}' added successfully!")
-                else:
-                    st.warning("Please set the OpenAI API key first.")
-            except Exception as e:
-                st.error(f"Error adding table: {e}")
+                    self.logger.info(f"Loaded existing table '{table_name}' from SQLite")
 
-    def load_table_from_sqlite(self, uploaded_file):
-        """Load a table from an uploaded SQLite database file."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as temp_file:
-            temp_file.write(uploaded_file.read())
-            temp_path = temp_file.name
+        except Exception as e:
+            self.logger.error(f"Error loading existing tables: {str(e)}")
 
-        engine = create_engine(f"sqlite:///{temp_path}")
-        inspector = inspect(engine)
-        table_names = inspector.get_table_names()
+    def add_dataframe(self, name: str, df: pd.DataFrame, description: str = "", source_type: str = "") -> None:
+        """Add a DataFrame to both DuckDB and SQLite with metadata."""
+        try:
+            name = "".join(c if c.isalnum() else "_" for c in name)
+            df.to_sql(name, self.sql_engine, if_exists='replace', index=False)
+            self.duckdb_conn.register(name, df)
 
-        if not table_names:
-            st.error("No tables found in the SQLite database!")
-            os.unlink(temp_path)
-            return None
+            self.metadata[name] = DataFrameMetadata(
+                name=name,
+                columns=df.columns.tolist(),
+                sample_values={col: df[col].dropna().sample(min(5, len(df))).tolist()
+                               for col in df.columns},
+                cardinality={col: df[col].nunique() for col in df.columns},
+                total_rows=len(df),
+                description=description,
+                source_type=source_type,
+                last_updated=datetime.now()
+            )
+            self.logger.info(f"Successfully added DataFrame '{name}'")
 
-        selected_table = st.selectbox("Select a table to import", table_names)
-        if selected_table:
-            df = pd.read_sql_table(selected_table, engine)
-            os.unlink(temp_path)
-            return df
+        except Exception as e:
+            self.logger.error(f"Error adding DataFrame '{name}': {str(e)}")
+            raise
 
-    def render_chat_interface(self):
-        st.header("Chat Interface")
-        if not st.session_state.openai_api_key:
-            st.warning("Please enter your OpenAI API key in the sidebar.")
-            return
-
-        user_input = st.text_input("Ask a question:")
-        if user_input and st.session_state.query_generator:
-            try:
-                sql_query, summary_prompt, token_usage = st.session_state.query_generator.generate_query(user_input)
-                result_df = st.session_state.df_manager.duckdb_conn.execute(sql_query).fetchdf()
-
-                st.write("### Query:")
-                st.code(sql_query)
-                st.write("### Results:")
-                st.dataframe(result_df)
-                st.write("### Summary:")
-                st.info(summary_prompt)
-
-                # Display token usage
-                st.write("### Token Usage:")
-                st.json(token_usage)
-
-                # Store the query results for visualization
-                st.session_state.query_results = result_df
-
-                # Add a Visualize button
-                if st.button("Visualize"):
-                    st.session_state.show_visualization = True
-
-            except Exception as e:
-                st.error(f"Error processing question: {str(e)}")
-
-        # Visualization Section
-        if st.session_state.show_visualization and st.session_state.query_results is not None:
-            self.render_visualization_tab(st.session_state.query_results)
-
-    def render_visualization_tab(self, df: pd.DataFrame):
-        st.header("Visualize Your Data")
-
-        # Initialize chart generator
-        chart_generator = ChartCodeGenerator(api_key=st.session_state.openai_api_key)
-
-        # Chart customization options
-        chart_type = st.selectbox("Select Chart Type", list(chart_generator.chart_templates.keys()))
-
-        # Get numeric columns for y-axis
-        numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
-
-        # Select columns based on chart type
-        x_axis = st.selectbox("Select X-Axis", df.columns)
-
-        if chart_type != "Pie Chart" and chart_type != "Histogram":
-            y_axis = st.selectbox("Select Y-Axis", numeric_cols)
-        else:
-            y_axis = None if chart_type == "Histogram" else x_axis
-
-        color = st.color_picker("Pick a Color", "#636EFA")
-
-        # Generate chart
-        if st.button("Generate Chart"):
-            try:
-                fig = chart_generator.generate_chart(
-                    df=df,
-                    chart_type=chart_type,
-                    x_column=x_axis,
-                    y_column=y_axis,
-                    color=color
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-                # Add chart suggestion
-                suggestion = chart_generator.suggest_chart_type(df, x_axis, y_axis)
-                st.info(f"💡 Suggested visualization: {suggestion}")
-
-            except Exception as e:
-                st.error(f"Error generating chart: {str(e)}")
+    def delete_table(self, table_name: str) -> None:
+        """Delete a table permanently from SQLite and DuckDB."""
+        try:
+            with self.sql_engine.connect() as conn:
+                conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+            self.duckdb_conn.unregister(table_name)
+            self.metadata.pop(table_name, None)
+            self.logger.info(f"Successfully deleted table '{table_name}' from the database.")
+        except Exception as e:
+            self.logger.error(f"Error deleting table '{table_name}': {str(e)}")
+            raise
 
 
-def main():
-    app = StreamlitChatBot()
-    app.setup_page()
-    app.render_sidebar()
-    app.render_chat_interface()
+class QueryGenerator:
+    """Generates SQL queries based on natural language input with enhanced join support."""
 
+    def __init__(self, df_manager: DataFrameManager, api_key: str):
+        self.df_manager = df_manager
+        self.openai_client = OpenAI(api_key=api_key)
+        self.join_handler = JoinHandler(
+            {name: pd.DataFrame.from_dict(meta.sample_values) for name, meta in df_manager.metadata.items()}
+        )  # Initialize JoinHandler with metadata
 
-if __name__ == "__main__":
-    main()
+    def generate_query(self, user_question: str) -> Tuple[str, str]:
+        """Generate SQL query and summary prompt from user question."""
+        context = self._create_enhanced_context()
+
+        # Determine if joins are required
+        join_details = self.join_handler.get_join_details(user_question)
+        relevant_tables = join_details["relevant_tables"]
+        joins = join_details["joins"]
+
+        # If only one table is relevant, generate a simple query
+        if len(relevant_tables) == 1:
+            table_name = relevant_tables[0]
+            sql_query = f"SELECT * FROM {table_name}"
+            return sql_query, f"Simple query for table: {table_name}"
+
+        # If joins are required, generate a join query
+        if joins:
+            join_query = self.join_handler.generate_join_query(user_question)
+            return join_query, "Generated a query with necessary joins."
+
+        # Fallback to OpenAI-based generation if no relevant tables or joins are found
+        system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
+        The tables are stored in a DuckDB database. Only return the SQL query, nothing else.
+
+        Guidelines:
+        1. For simple queries on a single table, use straightforward SELECT statements
+        2. When joining tables:
+           - Use explicit join types (LEFT JOIN, RIGHT JOIN, FULL JOIN) as required
+           - Identify primary and foreign key relationships automatically
+           - Match columns that appear to be related (e.g., id fields, matching names)
+           - Use clear ON conditions
+        3. Include WHERE, GROUP BY, or HAVING clauses as needed
+        4. Use appropriate aggregations (SUM, COUNT, AVG) when needed
+        5. Handle NULL values appropriately
+        
+        Available tables and their metadata:
+        {context}
+        """
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_question}
+        ]
+
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                temperature=0
+            )
+
+            raw_sql_query = response.choices[0].message.content
+            sql_query = self._sanitize_sql_query(raw_sql_query)
+
+            return sql_query, "Generated a query using OpenAI assistance."
+
+        except Exception as e:
+            raise ValueError(f"Error generating query: {str(e)}")
+
+    def _create_enhanced_context(self) -> str:
+        """Create enhanced context string with table relationships."""
+        context_parts = []
+
+        for name, meta in self.df_manager.metadata.items():
+            table_info = [
+                f"\nTable: {name}",
+                f"Description: {meta.description}" if meta.description else "",
+                f"Total Rows: {meta.total_rows}",
+                "Columns:"
+            ]
+
+            for col in meta.columns:
+                sample_values = meta.sample_values.get(col, [])
+                cardinality = meta.cardinality.get(col, 0)
+                data_type = self._infer_column_type(sample_values)
+
+                col_info = [f"  - {col} ({data_type})"]
+                if cardinality:
+                    col_info.append(f"Unique values: {cardinality}")
+                if sample_values:
+                    col_info.append(f"Examples: {', '.join(str(v) for v in sample_values[:3])}")
+
+                table_info.append(" | ".join(col_info))
+
+            context_parts.append("\n".join(filter(None, table_info)))
+
+        return "\n\n".join(context_parts)
+
+    def _infer_column_type(self, values: List[Any]) -> str:
+        """Infer the data type of a column from its values."""
+        if not values:
+            return "unknown"
+        sample = values[0]
+        if isinstance(sample, (int, np.integer)):
+            return "integer"
+        elif isinstance(sample, (float, np.floating)):
+            return "numeric"
+        elif isinstance(sample, (datetime, np.datetime64)):
+            return "datetime"
+        return "text"
+
+    def _sanitize_sql_query(self, raw_query: str) -> str:
+        """Clean and validate the SQL query."""
+        clean_query = raw_query.replace("```sql", "").replace("```", "").strip()
+
+        sql_pattern = re.compile(r"(SELECT|WITH)\s+", re.IGNORECASE)
+        match = sql_pattern.search(clean_query)
+
+        if not match:
+            raise ValueError("No valid SQL query found in the response")
+
+        query = clean_query[match.start():].strip()
+        return re.split(r';\s*--|\s*--|\s*;', query)[0].strip()
