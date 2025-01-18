@@ -188,7 +188,6 @@ class QueryGenerator:
             table_info = [
                 f"\nTable: {name}",
                 f"Description: {meta.description}" if meta.description else "",
-                f"Total Rows: {meta.total_rows}",
                 "Columns:"
             ]
 
@@ -215,50 +214,49 @@ class QueryGenerator:
             return f"Table '{table_name}' not found in metadata."
 
         meta = self.df_manager.metadata[table_name]
-        insights = [
-            f"Insights for table '{meta.name}' based on the question '{user_question}':"
-        ]
+        insights = []
 
-        # Analyze specific columns based on likely intent in the question
-        if "revenue" in user_question.lower():
-            if "TotalRevenue" in meta.columns:
-                avg_revenue = np.mean(meta.sample_values.get("TotalRevenue", []))
-                max_revenue = max(meta.sample_values.get("TotalRevenue", []), default="N/A")
-                insights.append(f"- The average revenue is {avg_revenue:.2f}, with the highest being {max_revenue}.")
+        # Example insights generation logic
+        for col in meta.columns[:5]:  # Limit to 5 columns for brevity
+            sample_values = meta.sample_values.get(col, [])
+            cardinality = meta.cardinality.get(col, 0)
 
-        if "customer" in user_question.lower():
-            if "CustomerName" in meta.columns:
-                common_customers = meta.sample_values.get("CustomerName", [])
-                insights.append(f"- Frequent customers include: {', '.join(common_customers[:3])}.")
+            if cardinality == 1:
+                insights.append(f"Column '{col}' has a single unique value, likely constant.")
+            elif cardinality <= 5:
+                insights.append(f"Column '{col}' has low diversity with only {cardinality} unique values. Examples: {', '.join(map(str, sample_values[:3]))}.")
+            else:
+                common_values = sample_values[:3] if sample_values else []
+                insights.append(f"Column '{col}' shows diversity with examples: {', '.join(map(str, common_values))}.")
 
-        # Add more targeted insights based on question content
-        if "trend" in user_question.lower():
-            insights.append("- Analyze data over time to identify trends. Consider aggregating by date.")
+        if "revenue" in user_question.lower() and "TotalRevenue" in meta.columns:
+            total_revenue = sum(meta.sample_values.get("TotalRevenue", []))
+            insights.append(f"The dataset contains total revenue of {total_revenue:.2f} units across sampled rows.")
 
-        return "\n".join(insights)
+        return "\n".join(insights[:5])
 
     def _summarize_output_table_from_query(self, query: str, user_question: str) -> str:
         """Execute the query and summarize the output table based on user question."""
         try:
             df = self.df_manager.duckdb_conn.execute(query).fetchdf()
-            insights = [
-                f"Summary of query results based on the question '{user_question}':"
-            ]
+            insights = []
 
-            # Provide targeted insights based on user intent
+            for col in df.columns[:5]:  # Limit to 5 columns for brevity
+                unique_count = df[col].nunique()
+                if unique_count == 1:
+                    insights.append(f"Column '{col}' has a single unique value, indicating uniformity.")
+                elif unique_count <= 5:
+                    examples = df[col].dropna().unique()[:3]
+                    insights.append(f"Column '{col}' has low diversity with {unique_count} unique values. Examples: {', '.join(map(str, examples))}.")
+                else:
+                    examples = df[col].dropna().sample(min(3, len(df))).tolist()
+                    insights.append(f"Column '{col}' has diverse values. Examples: {', '.join(map(str, examples))}.")
+
             if "revenue" in user_question.lower() and "TotalRevenue" in df.columns:
-                avg_revenue = df["TotalRevenue"].mean()
-                max_revenue = df["TotalRevenue"].max()
-                insights.append(f"- Average revenue: {avg_revenue:.2f}. Maximum revenue: {max_revenue:.2f}.")
+                total_revenue = df["TotalRevenue"].sum()
+                insights.append(f"Total revenue in the dataset is {total_revenue:.2f} units.")
 
-            if "customer" in user_question.lower() and "CustomerName" in df.columns:
-                common_customers = df["CustomerName"].value_counts().index[:3].tolist()
-                insights.append(f"- Top customers: {', '.join(common_customers)}.")
-
-            if "trend" in user_question.lower() and "Date" in df.columns:
-                insights.append("- Analyze trends over time using the 'Date' column.")
-
-            return "\n".join(insights)
+            return "\n".join(insights[:5])
 
         except Exception as e:
             return f"Error summarizing query results: {str(e)}"
