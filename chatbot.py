@@ -1,5 +1,3 @@
- 
-# Base line 2 (tests required)
 import os
 import pandas as pd
 import duckdb
@@ -212,21 +210,47 @@ class QueryGenerator:
         return "\n\n".join(context_parts)
 
     def _summarize_output_table(self, table_name: str) -> str:
-        """Summarize the output table based on its metadata."""
+        """Generate actionable insights for the output table."""
         if table_name not in self.df_manager.metadata:
             return f"Table '{table_name}' not found in metadata."
 
         meta = self.df_manager.metadata[table_name]
         summary = [
-            f"Summary of table '{meta.name}':",
-            f"- Total Rows: {meta.total_rows}",
-            "- Columns:"
+            f"Insights for table '{meta.name}':"
         ]
 
+        # Highlight total rows and overall structure
+        summary.append(f"- The table contains {meta.total_rows} rows and {len(meta.columns)} columns.")
+
+        # Identify columns with high cardinality or unique characteristics
+        high_cardinality_cols = [
+            col for col, cardinality in meta.cardinality.items() if cardinality > 0.9 * meta.total_rows
+        ]
+        if high_cardinality_cols:
+            summary.append(f"- Columns with many unique values: {', '.join(high_cardinality_cols)}.")
+
+        # Identify columns with low variance or common repeated values
         for col in meta.columns:
+            sample_values = meta.sample_values.get(col, [])
             cardinality = meta.cardinality.get(col, 0)
+
+            if cardinality == 1:
+                summary.append(f"- Column '{col}' has only one unique value: {sample_values[0]}.")
+            elif sample_values:
+                most_common = max(sample_values, key=sample_values.count)
+                summary.append(
+                    f"- Column '{col}' contains repeated values. Common example: {most_common}."
+                )
+
+        # Highlight columns with missing data
+        missing_data_cols = [col for col in meta.columns if len(meta.sample_values.get(col, [])) < 5]
+        if missing_data_cols:
+            summary.append(f"- Columns with missing or sparse data: {', '.join(missing_data_cols)}.")
+
+        # Provide examples for key columns
+        for col in meta.columns[:3]:  # Limit examples to first 3 columns for brevity
             examples = ", ".join(map(str, meta.sample_values.get(col, [])[:3]))
-            summary.append(f"  - {col}: {cardinality} unique values, examples: {examples}")
+            summary.append(f"- Examples from column '{col}': {examples}.")
 
         return "\n".join(summary)
 
