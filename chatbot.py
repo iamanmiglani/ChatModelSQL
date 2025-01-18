@@ -120,9 +120,10 @@ class QueryGenerator:
             {name: pd.DataFrame.from_dict(meta.sample_values) for name, meta in df_manager.metadata.items()}
         )  # Initialize JoinHandler with metadata
 
-    def generate_query(self, user_question: str) -> Tuple[str, str]:
+    def generate_query(self, user_question: str) -> Tuple[str, str, Dict[str, int]]:
         """Generate SQL query and summary prompt from user question."""
         context = self._create_enhanced_context()
+        token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
         # Determine if joins are required
         join_details = self.join_handler.get_join_details(user_question)
@@ -133,13 +134,14 @@ class QueryGenerator:
         if len(relevant_tables) == 1:
             table_name = relevant_tables[0]
             sql_query = f"SELECT * FROM {table_name}"
-            return sql_query, self._summarize_output_table(table_name)
+            summary = self._summarize_output_table(table_name)
+            return sql_query, summary, token_usage
 
         # If joins are required, generate a join query
         if joins:
             join_query = self.join_handler.generate_join_query(user_question)
             output_table_summary = self._summarize_output_table_from_query(join_query)
-            return join_query, output_table_summary
+            return join_query, output_table_summary, token_usage
 
         # Fallback to OpenAI-based generation if no relevant tables or joins are found
         system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
@@ -176,7 +178,12 @@ class QueryGenerator:
             sql_query = self._sanitize_sql_query(raw_sql_query)
             output_table_summary = self._summarize_output_table_from_query(sql_query)
 
-            return sql_query, output_table_summary
+            # Capture token usage
+            token_usage["input_tokens"] = response.usage.get("prompt_tokens", 0)
+            token_usage["output_tokens"] = response.usage.get("completion_tokens", 0)
+            token_usage["total_tokens"] = response.usage.get("total_tokens", 0)
+
+            return sql_query, output_table_summary, token_usage
 
         except Exception as e:
             raise ValueError(f"Error generating query: {str(e)}")
