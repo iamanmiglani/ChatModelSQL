@@ -131,7 +131,7 @@ class StreamlitChatBot:
         user_input = st.text_input("Ask a question:")
         if user_input and st.session_state.query_generator:
             try:
-                sql_query, summary_prompt = st.session_state.query_generator.generate_query(user_input)
+                sql_query, summary_prompt, token_usage = st.session_state.query_generator.generate_query(user_input)
                 result_df = st.session_state.df_manager.duckdb_conn.execute(sql_query).fetchdf()
 
                 st.write("### Query:")
@@ -140,6 +140,10 @@ class StreamlitChatBot:
                 st.dataframe(result_df)
                 st.write("### Summary:")
                 st.info(summary_prompt)
+
+                # Display token usage
+                st.write("### Token Usage:")
+                st.json(token_usage)
 
                 # Store the query results for visualization
                 st.session_state.query_results = result_df
