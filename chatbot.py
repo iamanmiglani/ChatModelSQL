@@ -1,3 +1,5 @@
+
+
 # Base line 2 (tests required)
 import os
 import pandas as pd
@@ -120,10 +122,9 @@ class QueryGenerator:
             {name: pd.DataFrame.from_dict(meta.sample_values) for name, meta in df_manager.metadata.items()}
         )  # Initialize JoinHandler with metadata
 
-    def generate_query(self, user_question: str) -> Tuple[str, str, Dict[str, int]]:
+    def generate_query(self, user_question: str) -> Tuple[str, str]:
         """Generate SQL query and summary prompt from user question."""
         context = self._create_enhanced_context()
-        token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
         # Determine if joins are required
         join_details = self.join_handler.get_join_details(user_question)
@@ -134,14 +135,12 @@ class QueryGenerator:
         if len(relevant_tables) == 1:
             table_name = relevant_tables[0]
             sql_query = f"SELECT * FROM {table_name}"
-            summary = self._summarize_output_table(table_name)
-            return sql_query, summary, token_usage
+            return sql_query, f"Simple query for table: {table_name}"
 
         # If joins are required, generate a join query
         if joins:
             join_query = self.join_handler.generate_join_query(user_question)
-            output_table_summary = self._summarize_output_table_from_query(join_query)
-            return join_query, output_table_summary, token_usage
+            return join_query, "Generated a query with necessary joins."
 
         # Fallback to OpenAI-based generation if no relevant tables or joins are found
         system_prompt = f"""You are a SQL expert. Generate a SQL query based on the following context and question. 
@@ -176,15 +175,8 @@ class QueryGenerator:
 
             raw_sql_query = response.choices[0].message.content
             sql_query = self._sanitize_sql_query(raw_sql_query)
-            output_table_summary = self._summarize_output_table_from_query(sql_query)
 
-            # Capture token usage safely
-            if hasattr(response, 'usage') and response.usage:
-                token_usage["input_tokens"] = response.usage.get("prompt_tokens", 0)
-                token_usage["output_tokens"] = response.usage.get("completion_tokens", 0)
-                token_usage["total_tokens"] = response.usage.get("total_tokens", 0)
-
-            return sql_query, output_table_summary, token_usage
+            return sql_query, "Generated a query using OpenAI assistance."
 
         except Exception as e:
             raise ValueError(f"Error generating query: {str(e)}")
@@ -218,45 +210,6 @@ class QueryGenerator:
 
         return "\n\n".join(context_parts)
 
-    def _summarize_output_table(self, table_name: str) -> str:
-        """Summarize the output table based on its metadata."""
-        if table_name not in self.df_manager.metadata:
-            return f"Table '{table_name}' not found in metadata."
-
-        meta = self.df_manager.metadata[table_name]
-        summary = [
-            f"Summary of table '{meta.name}':",
-            f"- Total Rows: {meta.total_rows}",
-            "- Columns:"
-        ]
-
-        for col in meta.columns:
-            cardinality = meta.cardinality.get(col, 0)
-            examples = ", ".join(map(str, meta.sample_values.get(col, [])[:3]))
-            summary.append(f"  - {col}: {cardinality} unique values, examples: {examples}")
-
-        return "\n".join(summary)
-
-    def _summarize_output_table_from_query(self, query: str) -> str:
-        """Execute the query and summarize the output table."""
-        try:
-            df = self.df_manager.duckdb_conn.execute(query).fetchdf()
-            total_rows = len(df)
-            summary = [
-                f"Summary of query output:",
-                f"- Total Rows: {total_rows}",
-                "- Columns:"
-            ]
-
-            for col in df.columns:
-                unique_values = df[col].nunique()
-                examples = ", ".join(map(str, df[col].dropna().sample(min(3, total_rows)).tolist()))
-                summary.append(f"  - {col}: {unique_values} unique values, examples: {examples}")
-
-            return "\n".join(summary)
-        except Exception as e:
-            return f"Error summarizing output table: {str(e)}"
-
     def _infer_column_type(self, values: List[Any]) -> str:
         """Infer the data type of a column from its values."""
         if not values:
@@ -282,3 +235,4 @@ class QueryGenerator:
 
         query = clean_query[match.start():].strip()
         return re.split(r';\s*--|\s*--|\s*;', query)[0].strip()
+
