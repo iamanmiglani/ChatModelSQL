@@ -178,10 +178,11 @@ class QueryGenerator:
             sql_query = self._sanitize_sql_query(raw_sql_query)
             output_table_summary = self._summarize_output_table_from_query(sql_query)
 
-            # Capture token usage
-            token_usage["input_tokens"] = response.usage.get("prompt_tokens", 0)
-            token_usage["output_tokens"] = response.usage.get("completion_tokens", 0)
-            token_usage["total_tokens"] = response.usage.get("total_tokens", 0)
+            # Capture token usage safely
+            if hasattr(response, 'usage') and response.usage:
+                token_usage["input_tokens"] = response.usage.get("prompt_tokens", 0)
+                token_usage["output_tokens"] = response.usage.get("completion_tokens", 0)
+                token_usage["total_tokens"] = response.usage.get("total_tokens", 0)
 
             return sql_query, output_table_summary, token_usage
 
