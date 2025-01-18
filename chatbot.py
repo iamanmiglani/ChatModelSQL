@@ -132,12 +132,12 @@ class QueryGenerator:
         if len(relevant_tables) == 1:
             table_name = relevant_tables[0]
             sql_query = f"SELECT * FROM {table_name}"
-            return sql_query, self._summarize_output_table(table_name)
+            return sql_query, self._summarize_output_table(table_name, user_question)
 
         # If joins are required, generate a join query
         if joins:
             join_query = self.join_handler.generate_join_query(user_question)
-            output_table_summary = self._summarize_output_table_from_query(join_query)
+            output_table_summary = self._summarize_output_table_from_query(join_query, user_question)
             return join_query, output_table_summary
 
         # Fallback to OpenAI-based generation if no relevant tables or joins are found
@@ -173,7 +173,7 @@ class QueryGenerator:
 
             raw_sql_query = response.choices[0].message.content
             sql_query = self._sanitize_sql_query(raw_sql_query)
-            output_table_summary = self._summarize_output_table_from_query(sql_query)
+            output_table_summary = self._summarize_output_table_from_query(sql_query, user_question)
 
             return sql_query, output_table_summary
 
@@ -209,70 +209,59 @@ class QueryGenerator:
 
         return "\n\n".join(context_parts)
 
-    def _summarize_output_table(self, table_name: str) -> str:
-        """Generate actionable insights for the output table."""
+    def _summarize_output_table(self, table_name: str, user_question: str) -> str:
+        """Generate actionable insights for the output table based on user question."""
         if table_name not in self.df_manager.metadata:
             return f"Table '{table_name}' not found in metadata."
 
         meta = self.df_manager.metadata[table_name]
-        summary = [
-            f"Insights for table '{meta.name}':"
+        insights = [
+            f"Insights for table '{meta.name}' based on the question '{user_question}':"
         ]
 
-        # Highlight total rows and overall structure
-        summary.append(f"- The table contains {meta.total_rows} rows and {len(meta.columns)} columns.")
+        # Analyze specific columns based on likely intent in the question
+        if "revenue" in user_question.lower():
+            if "TotalRevenue" in meta.columns:
+                avg_revenue = np.mean(meta.sample_values.get("TotalRevenue", []))
+                max_revenue = max(meta.sample_values.get("TotalRevenue", []), default="N/A")
+                insights.append(f"- The average revenue is {avg_revenue:.2f}, with the highest being {max_revenue}.")
 
-        # Identify columns with high cardinality or unique characteristics
-        high_cardinality_cols = [
-            col for col, cardinality in meta.cardinality.items() if cardinality > 0.9 * meta.total_rows
-        ]
-        if high_cardinality_cols:
-            summary.append(f"- Columns with many unique values: {', '.join(high_cardinality_cols)}.")
+        if "customer" in user_question.lower():
+            if "CustomerName" in meta.columns:
+                common_customers = meta.sample_values.get("CustomerName", [])
+                insights.append(f"- Frequent customers include: {', '.join(common_customers[:3])}.")
 
-        # Identify columns with low variance or common repeated values
-        for col in meta.columns:
-            sample_values = meta.sample_values.get(col, [])
-            cardinality = meta.cardinality.get(col, 0)
+        # Add more targeted insights based on question content
+        if "trend" in user_question.lower():
+            insights.append("- Analyze data over time to identify trends. Consider aggregating by date.")
 
-            if cardinality == 1:
-                summary.append(f"- Column '{col}' has only one unique value: {sample_values[0]}.")
-            elif sample_values:
-                most_common = max(sample_values, key=sample_values.count)
-                summary.append(
-                    f"- Column '{col}' contains repeated values. Common example: {most_common}."
-                )
+        return "\n".join(insights)
 
-        # Highlight columns with missing data
-        missing_data_cols = [col for col in meta.columns if len(meta.sample_values.get(col, [])) < 5]
-        if missing_data_cols:
-            summary.append(f"- Columns with missing or sparse data: {', '.join(missing_data_cols)}.")
-
-        # Provide examples for key columns
-        for col in meta.columns[:3]:  # Limit examples to first 3 columns for brevity
-            examples = ", ".join(map(str, meta.sample_values.get(col, [])[:3]))
-            summary.append(f"- Examples from column '{col}': {examples}.")
-
-        return "\n".join(summary)
-
-    def _summarize_output_table_from_query(self, query: str) -> str:
-        """Execute the query and summarize the output table."""
+    def _summarize_output_table_from_query(self, query: str, user_question: str) -> str:
+        """Execute the query and summarize the output table based on user question."""
         try:
             df = self.df_manager.duckdb_conn.execute(query).fetchdf()
-            total_rows = len(df)
-            summary = [
-                f"Summary of query output:",
-                f"- Total Rows: {total_rows}",
-                "- Columns:"
+            insights = [
+                f"Summary of query results based on the question '{user_question}':"
             ]
 
-            for col in df.columns:
-                unique_values = df[col].nunique()
-                examples = ", ".join(map(str, df[col].dropna().sample(min(3, total_rows)).tolist()))
-                summary.append(f"  - {col}: {unique_values} unique values, examples: {examples}")
+            # Provide targeted insights based on user intent
+            if "revenue" in user_question.lower() and "TotalRevenue" in df.columns:
+                avg_revenue = df["TotalRevenue"].mean()
+                max_revenue = df["TotalRevenue"].max()
+                insights.append(f"- Average revenue: {avg_revenue:.2f}. Maximum revenue: {max_revenue:.2f}.")
 
-            return "\n".join(summary)
+            if "customer" in user_question.lower() and "CustomerName" in df.columns:
+                common_customers = df["CustomerName"].value_counts().index[:3].tolist()
+                insights.append(f"- Top customers: {', '.join(common_customers)}.")
+
+            if "trend" in user_question.lower() and "Date" in df.columns:
+                insights.append("- Analyze trends over time using the 'Date' column.")
+
+            return "\n".join(insights)
+
         except Exception as e:
-            return f"Error summarizing output table: {str(e)}"
+            return f"Error summarizing query results: {str(e)}"
 
     def _infer_column_type(self, values: List[Any]) -> str:
         """Infer the data type of a column from its values."""
